@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-29
+
 First public version of Stadiacast: a LAN-side stand-in for the Stadia cloud endpoints that
 keeps the Stadia Controller's Wi-Fi mode working with your own PC. Everything below was
 confirmed against real controllers running the last public firmware, `ota.282115`.
@@ -35,3 +37,6 @@ confirmed against real controllers running the last public firmware, `ota.282115
 - Documentation: setup guide, protocol notes, architecture overview, contributing guide,
   security policy, code of conduct.
 - MIT License, with a `NOTICE` for the three protobuf schemas reproduced from the firmware.
+
+[Unreleased]: https://github.com/jkfran/stadiacast/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jkfran/stadiacast/releases/tag/v0.1.0
