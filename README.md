@@ -14,10 +14,10 @@ vibrates on request.
 It speaks the controller's stock protocol as is: **no firmware modification**, no Google
 account, and nothing leaves your LAN.
 
-> **Status:** works end to end (input and rumble) on the last public firmware, `ota.282115`,
-> with several controllers at once. Automatic first-boot provisioning and a virtual gamepad
-> driver are on the [roadmap](#roadmap). Expect rough edges; issues and pull requests are very
-> welcome.
+> **Status:** works end to end (input and rumble) on the controller's last Wi-Fi firmware,
+> `ota.282115`, with several controllers at once. Automatic first-boot provisioning and a
+> virtual gamepad driver are on the [roadmap](#roadmap). Expect rough edges; issues and pull
+> requests are very welcome.
 
 ## How it works
 
@@ -54,6 +54,9 @@ together.
 
 ## Requirements
 
+- A Stadia Controller still on its Wi-Fi firmware (`ota.282115`, the last one it received over
+  the air). Google's later Bluetooth-mode firmware, offered after the shutdown, replaces Wi-Fi
+  mode: a controller switched to Bluetooth mode cannot use Stadiacast.
 - Python 3.11 or newer.
 - A macOS or Linux host on the controller's network. The reference rig is a macOS Internet
   Sharing hotspot (macOS lets an unprivileged process bind ports 53, 80, 123 and 443; on Linux

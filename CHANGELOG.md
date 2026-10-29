@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format follows
 
 First public version of Stadiacast: a LAN-side stand-in for the Stadia cloud endpoints that
 keeps the Stadia Controller's Wi-Fi mode working with your own PC. Everything below was
-confirmed against real controllers running the last public firmware, `ota.282115`.
+confirmed against real controllers running the last Wi-Fi firmware, `ota.282115`.
 
 ### Added
 - The receiver (`stadiacast`): the HTTPS boot endpoints (`generate_204`, `stadiaconfig`,
