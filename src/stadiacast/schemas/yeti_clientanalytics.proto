@@ -1,0 +1,95 @@
+// protobuf schema used by the ota.282115 Gotham firmware
+syntax = "proto2";
+
+package chrome.cloudcast.proto.common;
+
+message ClientInfo {
+  optional chrome.cloudcast.proto.common.ClientInfo.ClientType client_type = 1;
+  optional chrome.cloudcast.proto.common.PlayCeClientInfo play_ce_client_info = 5;
+  optional chrome.cloudcast.proto.common.YetiClientInfo yeti_client_info = 15;
+
+  enum ClientType {
+    UNKNOWN = 0;
+    YETI = 11;
+  }
+}
+
+message PlayCeClientInfo {
+  optional string client_id = 1;
+  optional string logging_id = 7;
+  optional string make = 3;
+  optional string model = 4;
+  optional string application_build = 5;
+  optional string platform_version = 6;
+  optional string country = 8;
+}
+
+message YetiClientInfo {
+  optional string build_label = 1;
+  optional string deployment_type = 2;
+  optional string environment = 3;
+  optional string location = 4;
+  optional string machine = 5;
+  optional string gamelet_id = 6;
+  optional string machine_shape = 7;
+  optional string metro = 8;
+  optional string vm_purpose = 9;
+  optional string release_stage = 10;
+}
+
+message LogEvent {
+  optional int64 event_time_ms = 1;
+  optional int64 event_uptime_ms = 17;
+  optional int64 sequence_position = 21;
+  optional int32 event_code = 11;
+  optional int32 event_flow_id = 12;
+  optional bool is_user_initiated = 10;
+  optional bytes source_extension = 6;
+  optional sint64 timezone_offset_seconds = 15;
+}
+
+message BatchedLogRequest {
+  repeated chrome.cloudcast.proto.common.LogRequest log_request = 1;
+}
+
+message LogRequest {
+  optional int64 request_time_ms = 4;
+  optional int64 request_uptime_ms = 8;
+  optional chrome.cloudcast.proto.common.ClientInfo client_info = 1;
+  optional chrome.cloudcast.proto.common.LogRequest.LogSource log_source = 2;
+  optional string log_source_name = 6;
+  repeated chrome.cloudcast.proto.common.LogEvent log_event = 3;
+  repeated bytes serialized_log_events = 5;
+  optional chrome.cloudcast.proto.common.DeviceStatus device_status = 11;
+
+  enum LogSource {
+    UNKNOWN = -1;
+    YETI = 485;
+    STREAMZ = 604;
+    YETI_STREAMZ = 642;
+    YETI_CLIENT = 618;
+    YETI_GUESTORC = 679;
+    YETI_PTS = 693;
+    YETI_TLS_PROXY = 696;
+    YETI_VULKAN = 776;
+    YETI_DATAVM = 788;
+    YETI_LIBYETI = 837;
+    YETI_PCAP = 1113;
+    YETI_ABUSE = 1246;
+    YETI_GRAPHICS_TOOLS = 1289;
+  }
+}
+
+message LogResponse {
+  optional int64 next_request_wait_millis = 1;
+}
+
+message DeviceStatus {
+  optional chrome.cloudcast.proto.common.DeviceStatus.AutomaticTime auto_time_status = 3;
+
+  enum AutomaticTime {
+    UNKNOWN = 0;
+    AUTO_TIME_OFF = 1;
+    AUTO_TIME_ON = 2;
+  }
+}

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something does not work with the receiver or the controller
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not attach whole `captures/` directories, anything from `certs/`,
+        firmware images or decompiled code; pick the relevant lines from `server.jsonl` and strip anything
+        you consider private.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Stadiacast version
+      description: Output of `stadiacast --version`, or the commit.
+      placeholder: stadiacast 0.1.0
+  - type: input
+    id: firmware
+    attributes:
+      label: Controller firmware
+      description: From the `ready` / `http_request` records or the Omaha request (`version="…"`).
+      placeholder: ota.282115
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      placeholder: macOS 15.1 Internet Sharing hotspot, Python 3.13
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: How the receiver was started
+      placeholder: tools/start_receiver.sh --start-game
+      render: sh
+  - type: textarea
+    id: controller
+    attributes:
+      label: What the controller did
+      description: Light pattern, rumbles, when it powered off.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log records
+      description: Lines from `captures/<stamp>/server.jsonl` (and `dns.jsonl` if DNS is involved).
+      render: json

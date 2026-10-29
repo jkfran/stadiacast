@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Receiver runtime data: run directories (logs, packet captures, dumped request bodies)
+captures/
+
+# Certificates and private keys: never commit them
+certs/*
+!certs/README.md
+
+# Local overrides for tools/start_receiver.sh
+.env
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

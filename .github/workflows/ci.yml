@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --all-extras --locked
+      - run: uv run pytest -q
+      - run: uv run python -m stadiacast.schema_compiler --check
+
+  lint:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - run: uv sync --all-extras --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: shellcheck tools/*.sh
+
+  package:
+    name: build and install the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - name: install the wheel in a clean environment and run the commands
+        run: |
+          uv venv /tmp/wheel-venv
+          uv pip install --python /tmp/wheel-venv/bin/python dist/*.whl
+          /tmp/wheel-venv/bin/stadiacast --version
+          /tmp/wheel-venv/bin/stadiacast --help > /dev/null
+          /tmp/wheel-venv/bin/stadiacast-show-input --help > /dev/null
+          /tmp/wheel-venv/bin/stadiacast-provision --help > /dev/null

@@ -1,0 +1,35 @@
+// Game-phase StreamingClient RPC payloads (Gotham firmware ota.282115), carried
+// INSIDE the display link: the controller wraps an RpcMessage request in
+// ControllerToDisplay #1 ProxyRequest.body, the display answers with an
+// RpcMessage response in DisplayToController #1 ProxyResponse.data.
+// nanopb tables: request 0x6037202b, response 0x60371eff.
+// The sub-messages are declared as bytes here (wire-identical to an embedded
+// message) and decoded with the webrtc_sdp.proto types RtcSdpOffer (table
+// 0x6037237d), RtcSdpAnswer (0x60372157) and RtcIceCandidate (0x603720a8).
+// Names are ours.
+//
+// Compile: python3 -m stadiacast.schema_compiler   (see README.md in this directory)
+
+syntax = "proto2";
+
+package gotham.streamer;
+
+message StreamerRequest {                      // nanopb oneof; only variant 1 is known
+  optional InitializationRequest initialization = 1;
+}
+
+message InitializationRequest {                // GenerateInitializationRequest
+  optional int32 version = 1;                  // constant 1
+  optional bytes offer = 2;                    // RtcSdpOffer (fresh per-session certificate)
+  optional int32 f3 = 3;                       // session parameter, meaning unknown
+  optional string f4 = 4;                      // max 47; session parameter, meaning unknown
+}
+
+message StreamerResponse {                     // nanopb oneof; only variant 1 is known
+  optional InitializationResponse initialization = 1;
+}
+
+message InitializationResponse {               // applied by HandleInitializationResponse
+  optional bytes answer = 1;                   // RtcSdpAnswer
+  optional bytes candidate = 2;                // RtcIceCandidate: the game server's UDP endpoint (IP literal + port)
+}

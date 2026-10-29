@@ -1,0 +1,16 @@
+
+streamer_message.protogotham.streamer"Q
+StreamerRequest>
+initialization (2&.gotham.streamer.InitializationRequest"O
+InitializationRequest
+version (
+offer (
+
+f3 (
+
+f4 (	"S
+StreamerResponse?
+initialization (2'.gotham.streamer.InitializationResponse";
+InitializationResponse
+answer (
+	candidate (bproto2

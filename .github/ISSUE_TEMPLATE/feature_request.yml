@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose an improvement or a new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work. Protocol knowledge (observed firmware behaviour, log excerpts) is very welcome; please do not attach firmware images or decompiled code.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - receiver (HTTP, discovery, signaling)
+        - display link / input
+        - game session / rumble
+        - BLE provisioning
+        - virtual gamepad
+        - tooling, docs, tests

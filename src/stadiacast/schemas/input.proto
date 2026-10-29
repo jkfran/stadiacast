@@ -1,0 +1,397 @@
+// protobuf schema used by the ota.282115 Gotham firmware
+syntax = "proto2";
+
+package chrome.cloudcast.streaming;
+
+message KeyboardInputMessage_V1 {
+  uint32 key_code = 2;
+  bool is_key_up = 3;
+}
+
+message KeyboardTextMessage_V1 {
+  string text_input = 1;
+}
+
+message KeyboardRegisterMessage_V1 {
+  uint32 index = 1;
+  uint32 id = 2;
+  repeated chrome.cloudcast.streaming.KeyboardRegisterMessage_V1.KeymapEntry keymap = 3;
+
+  message KeymapEntry {
+    int32 key = 1;
+    string value = 2;
+  }
+}
+
+message KeyboardMessage_V1 {
+  chrome.cloudcast.streaming.KeyboardRegisterMessage_V1 register = 2;
+  chrome.cloudcast.streaming.KeyboardInputMessage_V1 input = 3;
+  chrome.cloudcast.streaming.KeyboardTextMessage_V1 text = 4;
+}
+
+message MouseInputMessage_V1 {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 flags = 3;
+  uint32 data = 4;
+}
+
+message MouseRegisterMessage_V1 {
+  uint32 index = 1;
+  uint32 id = 2;
+}
+
+message MouseCursorUpdateMessage_V1 {
+  bool mouse_lock_on = 1;
+  uint64 cursor_id = 2;
+  sint32 x = 3;
+  sint32 y = 4;
+  uint64 future_id = 7;
+  bool hide_cursor = 8;
+}
+
+message MouseCursorRegisterMessage_V1 {
+  uint64 cursor_id = 1;
+  sint32 hotspot_x = 2;
+  sint32 hotspot_y = 3;
+  bytes image_data = 4;
+  uint64 future_id = 6;
+}
+
+message MouseCursorFeedbackMessage_V1 {
+  uint64 future_id = 1;
+  bool success = 2;
+  uint64 cursor_id = 3;
+  uint64 last_seq_num = 4;
+}
+
+message MouseMessage_V1 {
+  chrome.cloudcast.streaming.MouseRegisterMessage_V1 register = 2;
+  chrome.cloudcast.streaming.MouseInputMessage_V1 input = 3;
+  chrome.cloudcast.streaming.MouseCursorUpdateMessage_V1 cursor_update = 4;
+  chrome.cloudcast.streaming.MouseCursorRegisterMessage_V1 cursor_register = 5;
+  chrome.cloudcast.streaming.MouseCursorFeedbackMessage_V1 cursor_feedback = 6;
+}
+
+message GamepadRegisterMessage_V1 {
+  uint32 index = 1;
+  uint32 id = 4;
+  chrome.cloudcast.streaming.GamepadRegisterMessage_V1.Type type = 5;
+
+  enum Type {
+    TYPE_INVALID = 0;
+    TYPE_GENERIC = 1;
+    TYPE_YETI = 2;
+    TYPE_PLAYSTATION = 3;
+    TYPE_NINTENDO = 4;
+  }
+}
+
+message GamepadButtonMessage_V1 {
+  uint32 index = 1;
+  uint32 buttons = 2;
+  uint32 id = 3;
+}
+
+message GamepadJoystickMessage_V1 {
+  uint32 index = 1;
+  uint32 left_x = 2;
+  uint32 left_y = 3;
+  uint32 right_x = 4;
+  uint32 right_y = 5;
+  uint32 id = 6;
+}
+
+message GamepadTriggerMessage_V1 {
+  uint32 index = 1;
+  uint32 left_trigger = 2;
+  uint32 right_trigger = 3;
+  uint32 id = 4;
+}
+
+message GamepadVibrationMessage_V1 {
+  uint32 index = 1;
+  uint32 left_motor_speed = 2;
+  uint32 right_motor_speed = 3;
+  uint32 id = 4;
+}
+
+message GamepadMessage_V1 {
+  chrome.cloudcast.streaming.GamepadMessageType type = 1;
+  chrome.cloudcast.streaming.GamepadRegisterMessage_V1 register = 2;
+  chrome.cloudcast.streaming.GamepadButtonMessage_V1 button = 3;
+  chrome.cloudcast.streaming.GamepadJoystickMessage_V1 joystick = 4;
+  chrome.cloudcast.streaming.GamepadTriggerMessage_V1 trigger = 5;
+  chrome.cloudcast.streaming.GamepadVibrationMessage_V1 vibration = 6;
+}
+
+message KeyboardMessage_V2 {
+  uint32 id = 1;
+  chrome.cloudcast.streaming.KeyboardMessage_V2.EventType event_type = 2;
+  uint32 key_code = 3;
+  string character = 4;
+  repeated chrome.cloudcast.streaming.KeyboardMessage_V2.DeviceKeymapEntry device_keymap = 16;
+  chrome.cloudcast.streaming.KeyboardMessage_V2.RegistrationInfo registration_info = 17;
+
+  message RegistrationInfo {
+    repeated chrome.cloudcast.streaming.KeyboardMessage_V2.RegistrationInfo.DeviceKeymapEntry device_keymap = 1;
+    chrome.cloudcast.streaming.KeyboardMessage_V2.RegistrationInfo.Type type = 2;
+
+    message DeviceKeymapEntry {
+      int32 key = 1;
+      string value = 2;
+    }
+
+    enum Type {
+      TYPE_INVALID = 0;
+      TYPE_PC = 1;
+      TYPE_APPLE = 2;
+    }
+  }
+
+  message DeviceKeymapEntry {
+    int32 key = 1;
+    string value = 2;
+  }
+
+  enum EventType {
+    EVENT_TYPE_INVALID = 0;
+    EVENT_TYPE_REGISTER = 1;
+    EVENT_TYPE_DEREGISTER = 2;
+    EVENT_TYPE_KEYDOWN = 3;
+    EVENT_TYPE_KEYUP = 4;
+    EVENT_TYPE_CHARACTER_REPEAT = 5;
+  }
+}
+
+message MouseMessage_V2 {
+  uint32 id = 1;
+  chrome.cloudcast.streaming.MouseMessage_V2.EventType event_type = 2;
+  uint32 modifier_key_state = 7;
+  chrome.cloudcast.streaming.MouseMessage_V2.Button button = 8;
+  uint32 click_count = 9;
+  float scroll_delta_x = 10;
+  float scroll_delta_y = 11;
+  sint32 wheel_clicks_y = 12;
+  bool device_lr_swapped = 16;
+  oneof x_oneof {
+    uint32 abs_x = 3;
+    sint32 rel_x = 4;
+  }
+  oneof y_oneof {
+    uint32 abs_y = 5;
+    sint32 rel_y = 6;
+  }
+
+  enum EventType {
+    EVENT_TYPE_INVALID = 0;
+    EVENT_TYPE_REGISTER = 1;
+    EVENT_TYPE_DEREGISTER = 2;
+    EVENT_TYPE_MOVE = 3;
+    EVENT_TYPE_BUTTON_DOWN = 4;
+    EVENT_TYPE_BUTTON_UP = 5;
+    EVENT_TYPE_WHEEL = 6;
+  }
+
+  enum Button {
+    BUTTON_INVALID = 0;
+    BUTTON_LEFT = 1;
+    BUTTON_MIDDLE = 2;
+    BUTTON_RIGHT = 3;
+    BUTTON_4 = 4;
+    BUTTON_5 = 5;
+  }
+}
+
+message GamepadMessage_V2 {
+  uint32 id = 1;
+  uint32 buttons = 2;
+  sint32 axis_left_x = 3;
+  sint32 axis_left_y = 4;
+  sint32 axis_right_x = 5;
+  sint32 axis_right_y = 6;
+  uint32 trigger_left = 7;
+  uint32 trigger_right = 8;
+  bool device_presence = 16;
+  chrome.cloudcast.streaming.GamepadMessage_V2.Type device_type = 17;
+  chrome.cloudcast.streaming.GamepadMessage_V2.RegistrationInfo registration_info = 18;
+
+  message RegistrationInfo {
+    bool is_connected = 1;
+    chrome.cloudcast.streaming.GamepadMessage_V2.Type type = 2;
+    oneof extended_info {
+      chrome.cloudcast.streaming.GamepadMessage_V2.RegistrationInfo.PlayStationExtendedInfo playstation_extended_info = 3;
+    }
+
+    message PlayStationExtendedInfo {
+      bool has_ds4_trackpad_button = 1;
+    }
+  }
+
+  enum Type {
+    TYPE_INVALID = 0;
+    TYPE_GENERIC = 1;
+    TYPE_YETI = 2;
+    TYPE_PLAYSTATION = 3;
+    TYPE_NINTENDO = 4;
+  }
+}
+
+message TouchMessage_V2 {
+  uint32 id = 1;
+  chrome.cloudcast.streaming.TouchMessage_V2.EventType event_type = 2;
+  repeated chrome.cloudcast.streaming.TouchMessage_V2.PointerState changed_pointers = 6;
+
+  message PointerState {
+    chrome.cloudcast.streaming.TouchMessage_V2.PointerState.Type type = 1;
+    uint32 index = 2;
+    uint32 x = 3;
+    uint32 y = 4;
+
+    enum Type {
+      TYPE_INVALID = 0;
+      TYPE_POINTER_DOWN = 1;
+      TYPE_POINTER_MOVE = 2;
+      TYPE_POINTER_UP = 3;
+    }
+  }
+
+  enum EventType {
+    EVENT_TYPE_INVALID = 0;
+    EVENT_TYPE_REGISTER = 1;
+    EVENT_TYPE_DEREGISTER = 2;
+    EVENT_TYPE_POINTER_DOWN = 4;
+    EVENT_TYPE_POINTER_MOVE = 3;
+    EVENT_TYPE_POINTER_UP = 5;
+    EVENT_TYPE_POINTER = 7;
+    EVENT_TYPE_CANCEL = 6;
+  }
+}
+
+message TextInputMessage_V2 {
+  uint32 device_id = 1;
+  uint32 flags = 2;
+  string text = 3;
+  chrome.cloudcast.streaming.TextInputMessage_V2.Action action = 4;
+  bool provides_text_input = 16;
+
+  enum Action {
+    ACTION_NONE = 0;
+    ACTION_UP = 1;
+    ACTION_DOWN = 2;
+    ACTION_LEFT = 3;
+    ACTION_RIGHT = 4;
+    ACTION_PAGEUP = 5;
+    ACTION_PAGEDOWN = 6;
+    ACTION_HOME = 7;
+    ACTION_END = 8;
+    ACTION_DELETE = 9;
+    ACTION_BACKSPACE = 10;
+    ACTION_NEXT = 11;
+    ACTION_PREV = 12;
+    ACTION_FINISH = 13;
+    ACTION_ABORT = 14;
+    ACTION_UNDO = 15;
+    ACTION_REDO = 16;
+    ACTION_CUT = 17;
+    ACTION_COPY = 18;
+    ACTION_PASTE = 19;
+  }
+}
+
+message MouseCursorUpdateMessage_V2 {
+  uint32 id = 1;
+  bool mouse_look_enabled = 2;
+  uint32 cursor_id = 3;
+  uint32 set_abs_x = 4;
+  uint32 set_abs_y = 5;
+  bool hide_cursor = 6;
+}
+
+message GamepadVibrationMessage_V2 {
+  uint32 id = 1;
+  uint32 left_motor_speed = 2;
+  uint32 right_motor_speed = 3;
+}
+
+message TextUpdateMessage_V2 {
+  uint32 device_id = 1;
+  chrome.cloudcast.streaming.TextUpdateMessage_V2.Type type = 2;
+  chrome.cloudcast.streaming.TextUpdateMessage_V2.RegionOfInterest region_of_interest = 3;
+
+  message RegionOfInterest {
+    uint32 x = 1;
+    uint32 y = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+  }
+
+  enum Type {
+    TYPE_NONE = 0;
+    TYPE_SINGLE_LINE = 1;
+    TYPE_MULTIPLE_LINE = 2;
+    TYPE_MULTIPLE_LINE_WITH_TAB = 3;
+    TYPE_PASSWORD = 4;
+    TYPE_NUMBER = 5;
+    TYPE_PHONE = 6;
+    TYPE_EMAIL = 7;
+    TYPE_URI = 8;
+  }
+}
+
+message ResetIdleShutoffTimerMessage_V2 {
+}
+
+message InputFeedbackMessage_V2 {
+  chrome.cloudcast.streaming.GamepadVibrationMessage_V2 gamepad_vibration = 1;
+  chrome.cloudcast.streaming.MouseCursorUpdateMessage_V2 mouse_cursor = 2;
+  chrome.cloudcast.streaming.TextUpdateMessage_V2 text_update = 3;
+  chrome.cloudcast.streaming.MouseCursorRegisterMessage_V1 cursor_register = 16;
+  chrome.cloudcast.streaming.ResetIdleShutoffTimerMessage_V2 reset_idle_shutoff_timer = 17;
+}
+
+message InputFutureResponse_V2 {
+  uint64 future_id = 1;
+  int32 status = 2;
+  oneof response_value_oneof {
+    uint64 cursor_id = 3;
+  }
+}
+
+message InputMessageSlim {
+  chrome.cloudcast.streaming.GamepadMessage_V1 gamepad_message = 1;
+  chrome.cloudcast.streaming.KeyboardMessage_V1 keyboard_message = 2;
+  chrome.cloudcast.streaming.MouseMessage_V1 mouse_message = 3;
+  uint32 relative_time_us = 4;
+  chrome.cloudcast.streaming.GamepadMessage_V2 gamepad_message_v2 = 5;
+  chrome.cloudcast.streaming.KeyboardMessage_V2 keyboard_message_v2 = 6;
+  chrome.cloudcast.streaming.MouseMessage_V2 mouse_message_v2 = 7;
+  chrome.cloudcast.streaming.TouchMessage_V2 touch_message_v2 = 13;
+  chrome.cloudcast.streaming.TextInputMessage_V2 text_input_message_v2 = 8;
+  chrome.cloudcast.streaming.InputFutureResponse_V2 input_future_response_v2 = 9;
+  chrome.cloudcast.streaming.InputFeedbackMessage_V2 input_feedback_message_v2 = 10;
+  uint32 relative_frame_token = 11;
+  uint32 rtp_timestamp = 12;
+  uint32 relative_time_error_us = 14;
+}
+
+message InputMessageSeries {
+  string session_id = 1;
+  uint64 sequence_number = 2;
+  uint64 base_timestamp_us = 3;
+  repeated chrome.cloudcast.streaming.InputMessageSlim messages = 4;
+  uint32 ack_time_us = 5;
+  uint64 base_frame_token = 7;
+}
+
+message InputProtocolMessage {
+  uint64 ack_sequence_number = 4;
+  bytes compressed_series = 5;
+  uint32 uncompressed_size = 6;
+  chrome.cloudcast.streaming.InputMessageSeries input_message_series = 7;
+}
+
+enum GamepadMessageType {
+  GAMEPAD_MESSAGE_TYPE_REGISTER = 4;
+  GAMEPAD_MESSAGE_TYPE_DEREGISTER = 5;
+}

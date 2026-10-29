@@ -1,0 +1,78 @@
+// RPC envelope of the display <-> controller link of the Stadia Controller
+// (Gotham firmware ota.282115).  These are C++ protobuf-lite classes (no
+// FileDescriptorProto, no nanopb table); field numbers, wire types and has-bit
+// layout come from the generated parse / serialize / ByteSize code, names are OURS.
+//
+// Transport: one serialized RpcMessage per WireHeader2 message (id 0x74 from the
+// controller, 0x75 from the display), carried in a DTLS application-data record.
+// The payload bytes
+// are the nanopb messages in controller_message.proto: DisplayToController for
+// what the display sends (requests, notifications, responses), and
+// ControllerToDisplay for what the controller sends.
+//
+// Compile: python3 -m stadiacast.schema_compiler   (see README.md in this directory)
+
+syntax = "proto2";
+
+package gotham.rpc;
+
+// The oneof case holds the field number; rpc_endpoint.h routes 1 -> incoming
+// request, 2 -> response to one of our calls, 3 -> notification ("Received
+// unknown RpcMessage payload case").
+message RpcMessage {
+  oneof payload {
+    RpcRequest request = 1;                    // tag 0x0a
+    RpcResponse response = 2;                  // tag 0x12
+    RpcNotification notification = 3;         // tag 0x1a
+  }
+}
+
+// incoming_rpc_manager.h drops requests without a ticket ("Received RPC
+// message without ticket, dropping") or without a payload ("... without
+// payload, dropping").
+message RpcRequest {
+  optional uint32 ticket = 1;                  // echoed by the response
+  optional bytes payload = 2;                  // a nanopb message (controller_message.proto)
+}
+
+// Same layout and the same ticket/payload checks as RpcRequest ("Received RPC
+// notification without ticket/payload, dropping").
+message RpcNotification {
+  optional uint32 ticket = 1;
+  optional bytes payload = 2;
+}
+
+// Fields are written in number order.  The receiving side builds
+// absl::Status(code, error_message) and takes `payload` only when it is present.
+// The controller's own responder always writes ticket, code and error_message
+// ("" when OK).
+message RpcResponse {
+  optional uint32 ticket = 1;
+  optional StatusCode code = 2;                // absent = OK
+  optional string error_message = 3;
+  optional bytes payload = 4;
+}
+
+// absl::StatusCode numbering.  Seen in the firmware: NOT_FOUND (5) on a
+// GetCurrentTimeRequest means "not supported on the display, stopping display
+// clock sync"; the controller answers unknown display requests with
+// UNIMPLEMENTED ("Unimplemented RPC in ControllerMessage").
+enum StatusCode {
+  OK = 0;
+  CANCELLED = 1;
+  UNKNOWN = 2;
+  INVALID_ARGUMENT = 3;
+  DEADLINE_EXCEEDED = 4;
+  NOT_FOUND = 5;
+  ALREADY_EXISTS = 6;
+  PERMISSION_DENIED = 7;
+  RESOURCE_EXHAUSTED = 8;
+  FAILED_PRECONDITION = 9;
+  ABORTED = 10;
+  OUT_OF_RANGE = 11;
+  UNIMPLEMENTED = 12;
+  INTERNAL = 13;
+  UNAVAILABLE = 14;
+  DATA_LOSS = 15;
+  UNAUTHENTICATED = 16;
+}

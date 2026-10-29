@@ -1,0 +1,237 @@
+// Cloudcast discovery API of the Stadia Controller (Gotham firmware ota.282115),
+// documented from the nanopb field tables.  The firmware has no
+// FileDescriptorProto for these types, so every name below is OURS (chosen from
+// how the firmware uses the field); the field numbers, wire types, max sizes
+// and nesting are what the tables say.
+//
+// Labels: every static field in the tables is nanopb OPTIONAL (has_ flag); the
+// only table-level REQUIRED field is the GMsg extension.  "required" below marks
+// fields the *handler code* refuses to proceed without ("Missing required
+// field(s)." in discovery_client.cc); the receiver must always set them.
+//
+// Compile: python3 -m stadiacast.schema_compiler   (see README.md in this directory)
+
+syntax = "proto2";
+
+package gotham.discovery;
+
+// ---------------------------------------------------------------------------
+// POST /v1:FirmwareVersionCheck   (version_checker.cc)
+// ---------------------------------------------------------------------------
+
+// Request table 0x60351064 (pool slot DAT_6007c658).  The only field is the
+// running firmware version string ("282115").
+message FirmwareVersionCheckRequest {
+  optional string version = 1;                 // max 47
+}
+
+// Response table 0x603510e1 (pool slot DAT_6007c944).  The version checker
+// reads only `requires_update` ("requires"/"does not require" log).
+message FirmwareVersionCheckResponse {
+  optional bool requires_update = 1;
+  repeated Setting settings = 2;               // callback-decoded sub-messages, table 0x60351096
+}
+
+message Setting {
+  optional string name = 1;                    // callback string
+  optional SettingValue value = 2;             // table 0x603511c2
+}
+
+message SettingValue {
+  oneof value {
+    string string_value = 1;                   // max 47 (table 0x60351190)
+    bool bool_value = 2;                       // table 0x6035112c
+    int64 int64_value = 3;                     // table 0x6035115e
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1:RegisterController   (discovery_client.cc)
+// ---------------------------------------------------------------------------
+
+// Request table 0x60372bae (pool slot 0x60113b90), struct 0x1e8 bytes.
+message RegisterControllerRequest {
+  optional string device_id = 1;               // max 47; identity string from the device-info object
+  optional string cloud_device_id = 3;         // max 47; second identity string, only when present
+  optional string attempt_id = 4;              // max 47; fresh random id per registration ("Attempt ID: …, attempt # N")
+  optional DiscoverDisplayRequest discovery = 5;   // same table 0x60372a05; present when a discovery is being resumed
+  optional bool client_flag = 6;               // (client); meaning unknown (also DiscoverDisplayRequest.client_flag)
+  optional bool flag7 = 7;                     // never written by this firmware
+  optional string unused8 = 8;                 // callback string, never written
+}
+
+// Response table 0x60372c76 (pool slot 0x60111350), struct 0x100 bytes,
+// handler -> state-machine event 9 on success, 8 on failure.
+message RegisterControllerResponse {
+  optional string registration_id = 1;         // max 47 (guess at meaning)
+  required int64 poll_interval_ms = 2;         // handler: has_ && value > 0, else "Missing required field(s)." (name is a guess)
+  optional string registration_token = 3;      // max 63; likely echoed later as GmsgPollRequest.subscription (also 63)
+  optional bool flag4 = 4;
+  oneof result {
+    DiscoverDisplayResponse display = 5;       // same table as the DiscoverDisplay response (0x60372b31)
+    BoolResult pending = 6;                    // table 0x603729d3
+  }
+}
+
+message BoolResult {
+  optional bool value = 1;
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1:DiscoverDisplay   (discovery_client.cc)
+// ---------------------------------------------------------------------------
+
+// Request table 0x60372a05 (pool slot 0x60111c2c), struct 0x148 bytes.
+message DiscoverDisplayRequest {
+  optional string device_id = 1;               // max 47
+  oneof selector {
+    TypedKeys typed_keys = 3;                  // the link-code keys typed so far (KEYS_TYPED); table 0x6037d555
+    StringSelector string_selector = 5;        // max 47; never written by this firmware
+    BoolSelector resume = 9;                   // set to true on the RegisterController "resume" path; keys then go to field 10
+  }
+  // Serialized chrome.cloudcast.proto.api.common.WebRtcSdpAndIceCandidates
+  // { sdp { type: SDP_OFFER, sdp_offer: RtcSdpOffer }, ice_candidate: [...] },
+  // produced by the display connection (type is set to 1 = SDP_OFFER) and written
+  // through a nanopb encode callback.  The controller is the offerer.
+  optional bytes sdp_offer_bundle = 4;
+  optional string app_id = 6;                  // max 15; value of device setting "p_YetiAppId"
+  optional string attempt_id = 7;              // max 47; same attempt id as RegisterControllerRequest
+  optional string unused8 = 8;                 // max 47; never written
+  optional TypedKeys resumed_keys = 10;        // keys when resume = true
+  optional bool client_flag = 11;              // (client)
+  optional string unused12 = 12;               // callback string, never written
+}
+
+message TypedKeys {
+  repeated uint32 key = 1;                     // max_count 64, one byte each (nanopb int_size 8)
+}
+
+message StringSelector {
+  optional string value = 1;                   // max 47
+}
+
+message BoolSelector {
+  optional bool value = 1;
+}
+
+// Response table 0x60372b31 (pool slot 0x601114a4), struct 0x72 bytes,
+// handler -> event 6 on success, event 5 on "No response data." /
+// "Cannot parse response." / "Missing required field(s).".
+message DiscoverDisplayResponse {
+  optional string display_id = 1;              // max 47 (guess at meaning)
+  required string display_token = 4;           // max 63; handler: has_ && first byte != 0 (non-empty)
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1:ResolveDiscovery
+// ---------------------------------------------------------------------------
+
+// Request table 0x60372d70 (pool slot 0x6011206c), struct 0x70 bytes.
+message ResolveDiscoveryRequest {
+  optional string device_id = 1;               // max 47
+  optional string display_id = 2;              // max 47; string kept at client (guess: DiscoverDisplayResponse.display_id)
+  optional uint32 flag3 = 3;                   // one byte: (client != 0) && (client == 0)
+  optional ResolveDiscoveryOptions options = 4;    // table 0x60372d25; left at defaults
+}
+
+message ResolveDiscoveryOptions {
+  optional uint32 f1 = 1;                      // one byte
+  optional int32 f2 = 2;                       // int32 or enum
+}
+
+// The completion handler posts event 13 without looking at the
+// body or status: any HTTP 200 (even empty) is accepted.
+message ResolveDiscoveryResponse {
+}
+
+// ---------------------------------------------------------------------------
+// GMsg push channel: POST https://cloudcast-gmsg-prod.googleapis.com/gmsg
+// (first poll, then re-polls acking the previous message id)
+// ---------------------------------------------------------------------------
+
+// Request table 0x6038072e (pool slot 0x6011157c), struct 0xe0 bytes.
+message GmsgPollRequest {
+  optional string subscription = 1;            // max 63; string kept at client (guess: RegisterControllerResponse.registration_token)
+  optional GmsgMessageRef last_message = 2;    // ack of the previous GMsg: only .id is filled (from GmsgMessage.id)
+  optional int64 f3 = 3;                       // never written
+  optional bool ack = 4;                       // true whenever last_message is present
+}
+
+// Table 0x6038080f: the header of a GMsg as echoed back by the client.
+message GmsgMessageRef {
+  optional int64 id = 1;
+  optional GmsgMessageRefDetail detail = 2;    // table 0x60380afd
+  optional GmsgTraceList trace = 3;            // table 0x60380a4e (shared with GmsgMessage.trace)
+  optional GmsgTimestampsHolder timestamps = 4;    // table 0x603807dd
+  extensions 1000000 to max;
+}
+
+message GmsgMessageRefDetail {
+  optional int32 f1 = 1;                       // int32 or enum
+  optional string f2 = 2;                      // callback string
+  repeated GmsgKeyValue f3 = 3;                // table 0x60380b61
+}
+
+message GmsgKeyValue {
+  optional string key = 1;
+  optional bytes value = 2;
+}
+
+message GmsgTraceList {
+  optional bool f1 = 1;
+  repeated GmsgTraceEntry entry = 2;           // table 0x60380986
+}
+
+message GmsgTraceEntry {
+  optional string f1 = 1;
+  optional int64 f2 = 2;
+  optional string f3 = 3;
+  optional uint32 f5 = 5;                      // one byte
+  optional uint32 f6 = 6;                      // one byte
+  optional string f7 = 7;
+  optional int32 f8 = 8;                       // int32 or enum
+}
+
+message GmsgTimestampsHolder {
+  optional GmsgTimestamps timestamps = 1;      // table 0x60380a99
+}
+
+message GmsgTimestamps {
+  optional fixed64 f1 = 1;                     // fixed64 (or double / sfixed64)
+  optional fixed64 f2 = 2;
+  optional fixed64 f3 = 3;
+}
+
+// Response table 0x603807ab (pool slot 0x601134e4), struct 0x70 bytes.
+message GmsgEnvelope {
+  optional GmsgMessage message = 1;            // table 0x603808f0
+}
+
+message GmsgMessage {
+  optional int64 id = 1;                       // logged as "Received command #<id> from GMsg"; acked in the next poll
+  optional uint32 type = 2;                    // one byte; the payload is processed only when type == 42
+  optional GmsgTraceList trace = 3;
+  optional GmsgTimestampsWithFlag f48 = 48;    // table 0x603808a5
+  extensions 1000000 to max;                   // the controller payload is the extension below
+}
+
+message GmsgTimestampsWithFlag {
+  optional bool f1 = 1;
+  optional GmsgTimestamps timestamps = 2;
+}
+
+// pb_extension_type_t at 0x6031da88 (pool slot 0x601134e0): field 0x603806b1,
+// REQUIRED SUBMESSAGE tag 269197544, sub-table 0x603806ca.
+extend GmsgMessage {
+  optional ControllerCommand controller_command = 269197544;
+}
+
+message ControllerCommand {
+  // Serialized chrome.cloudcast.proto.api.common.WebRtcSdpAndIceCandidates;
+  // display_connection.cc parses it ("Parsing WebRtcAndIceCandidates failed: ")
+  // and installs it as the DisplayConnection's SDP answer ("Failed to set
+  // DisplayConnection's SDP answer: ", "No suitable candidates in SDP answer").
+  optional bytes payload = 1;
+  optional uint32 error_code = 2;              // one byte; if present -> "Received error <n> from gmsg", "GMsg cmd returns error."
+  optional string f3 = 3;                      // max 47; not read by the handler
+}

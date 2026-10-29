@@ -1,0 +1,24 @@
+Stadiacast
+Copyright (c) 2026 Francisco Jimenez Cabrera and the Stadiacast contributors
+
+Stadiacast is licensed under the MIT License (see LICENSE), with one exception.
+
+Three protobuf schemas under src/stadiacast/schemas/ are reproduced from the Stadia
+Controller firmware (ota.282115), which embeds them as serialized descriptors:
+
+    input.descriptor                 and its rendering input.proto
+    webrtc_sdp.descriptor            and its rendering webrtc_sdp.proto
+    yeti_clientanalytics.descriptor  and its rendering yeti_clientanalytics.proto
+
+These schemas, including the names in them, are Google's work. They are not covered by
+the MIT License and the Stadiacast authors claim no rights in them. They are included
+solely so that an independently created program can interoperate with the controller's
+stock firmware, and they are used here for that purpose only.
+
+Everything else in this repository is the work of the Stadiacast authors and is
+licensed under the MIT License. That includes the four hand-written schemas
+(discovery_api, rpc_message, controller_message, streamer_message), whose field numbers
+and wire types describe the firmware's protocol but whose names and text are ours.
+
+Stadiacast is an independent interoperability project. It is not affiliated with,
+endorsed by or supported by Google. Stadia is a trademark of Google LLC.

@@ -1,0 +1,109 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stadiacast"
+dynamic = ["version"]
+description = "A local server for the Stadia Controller's Wi-Fi mode: keeps the controller working with your own PC after the Stadia shutdown"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+authors = [{ name = "Francisco Jimenez Cabrera" }]
+keywords = ["stadia", "controller", "gamepad", "webrtc", "dtls", "srtp", "interoperability"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Games/Entertainment",
+  "Topic :: Software Development :: Embedded Systems",
+  "Typing :: Typed",
+  "Topic :: System :: Networking",
+]
+dependencies = [
+  "protobuf>=4.25",
+  "cryptography>=42",
+  "pyOpenSSL>=23.2",
+]
+
+[project.optional-dependencies]
+ble = ["bleak>=0.21"]
+passthrough = ["aiohttp>=3.9"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=5",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-protobuf>=5",
+]
+
+[project.urls]
+Homepage = "https://github.com/jkfran/stadiacast"
+Issues = "https://github.com/jkfran/stadiacast/issues"
+Changelog = "https://github.com/jkfran/stadiacast/blob/main/CHANGELOG.md"
+
+[project.scripts]
+stadiacast = "stadiacast.cli:main"
+stadiacast-provision = "stadiacast.ble_provisioner:main"
+stadiacast-show-input = "stadiacast.show_input:main"
+
+[tool.hatch.version]
+path = "src/stadiacast/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stadiacast"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "tools", "docs", "README.md", "CHANGELOG.md", "LICENSE", "NOTICE", "pyproject.toml"]
+
+# --- tooling -----------------------------------------------------------------
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "C4", "RUF", "PIE", "PERF", "PT", "ISC", "ARG", "RET", "A", "LOG", "FURB"]
+ignore = [
+  "SIM105",  # try/except/pass is clearer than contextlib.suppress in socket code
+  "PT011",   # pytest.raises(ValueError) without match= is fine for our small helpers
+  "PT018",   # the suite asserts several related facts per line on purpose
+  "RUF001", "RUF002", "RUF003",  # the Stadia button glyphs (≡, ⋯) appear in comments and strings
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stadiacast", "tests"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
+
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+ignore_missing_imports = true  # the optional extras (bleak, aiohttp) may be absent
+
+[tool.coverage.run]
+source = ["stadiacast"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
