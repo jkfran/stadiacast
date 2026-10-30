@@ -39,7 +39,7 @@ Options, from simplest to most involved:
 
 Caveat: when a redirected name gets NXDOMAIN the firmware falls back to `8.8.8.8` and reaches
 the real host through the NAT, which is why `--clearcut-block tls` (fail the TLS handshake)
-is preferred over `--clearcut-block dns` (see [protocol.md](protocol.md#clearcut-and-the-power-off)).
+is preferred over `--clearcut-block dns` (see [protocol.md](protocol.md#7-clearcut-and-the-power-off)).
 
 Ports used by the receiver (all configurable):
 
