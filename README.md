@@ -151,6 +151,30 @@ and triggers (0 to 255). Bits 0 to 15 of the button mask are the XInput `wButton
 `XINPUT_GAMEPAD` fields. The full layout is in
 [docs/protocol.md](docs/protocol.md#input-report-controllertodisplay-3).
 
+## Headset audio
+
+The headset jack takes a separate media stream on the display link: Opus in RTP (PT 111),
+protected with the SRTP keys the DTLS handshake negotiated, sent on the ICE pair it selected.
+Two things must happen first, and neither is in the SDP: the firmware has to be told
+`SetAudioMode(mode=2, f3=true)` (`DisplayToController` #16), and the media must go on the media
+5-tuple rather than the `0x66` sub-channel that carries input reports -- the pad accepts packets
+there and plays nothing. The stream keeps its own SSRC and sequence numbers instead of
+borrowing the endpoint's, which the input ACKs use.
+
+```sh
+stadiacast --audio-source tone          # 440 Hz, proves the path without any audio setup
+stadiacast --audio-source file:x.ogg    # anything ffmpeg can decode
+```
+
+The stream starts once the display link reaches READY. `--audio-bitrate` sets the Opus bitrate
+(64 kbit/s by default) and `/_status` reports the stream under `playback`. ffmpeg with libopus
+is the only extra requirement, and only for those two sources.
+
+Nothing in the receiver captures audio from a sound card. `ControllerSession.audio_start(None)`
+starts the pacer without an encoder and `audio_feed()` takes Opus frames, so a front end with
+its own capture and encoder drives it directly. How the frames are framed on the wire is in
+[docs/protocol.md](docs/protocol.md#audio-to-the-headset-jack).
+
 ## Repository layout
 
 | path | what |

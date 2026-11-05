@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows
   project and revoked before publication. `--cert`/`--key` and a pair under `certs/` take
   precedence, so forks and hosted deployments keep serving their own; `tools/pack_credential.py`
   builds the bundle.
+- Headset audio: Opus frames reach the controller's headset jack as SRTP on the media 5-tuple,
+  gated by `SetAudioMode(mode=2)` and paced on a 20 ms grid with their own SSRC and sequence
+  numbers (`--audio-source tone|file:PATH`, `ControllerSession.audio_start`). Capture is left
+  to the caller: `audio_feed()` takes frames from any encoder.
 
 ### Changed
 - `docs/protocol.md` and `docs/setup.md` record that the firmware does not check certificate

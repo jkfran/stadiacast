@@ -170,6 +170,20 @@ def build_parser(preset: str | None = None) -> argparse.ArgumentParser:
     g.add_argument("--ack-mode", choices=("rtp", "none"), default="rtp", help="echo InputProtocolMessage acks")
     g.add_argument("--input-payload-type", type=int, default=96)
 
+    g = ap.add_argument_group("headset audio")
+    g.add_argument(
+        "--audio-source",
+        default="",
+        help="send audio to the headset jack once the link is READY: '' (off), tone or file:PATH",
+    )
+    g.add_argument("--audio-bitrate", type=int, default=64, help="Opus bitrate in kbit/s")
+    g.add_argument(
+        "--audio-mode",
+        type=int,
+        default=2,
+        help="SetAudioModeRequest sent before the stream: 2 = WebRTC Opus (the jack), 0 = do not send one",
+    )
+
     g = ap.add_argument_group("display link")
     g.add_argument(
         "--display-rpc",
@@ -327,6 +341,9 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         rtcp_interval=a.rtcp_interval,
         ack_mode=a.ack_mode,
         input_payload_type=a.input_payload_type,
+        audio_source=a.audio_source,
+        audio_bitrate_kbps=a.audio_bitrate,
+        audio_mode=a.audio_mode,
         display_rpc=a.display_rpc,
         display_rpc_trigger=a.display_rpc_trigger,
         display_rpc_delay=a.display_rpc_delay,

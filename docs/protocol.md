@@ -153,6 +153,36 @@ Sent as an `RpcNotification` whenever something changes; decoded by `stadiacast.
 Bits 0 to 15 are the XInput `wButtons` layout; Stadia maps to the (undocumented) guide bit
 `0x0400`; Assistant and Capture have no XInput equivalent.
 
+### Audio to the headset jack
+
+The jack is fed by a normal RTP stream on the ICE pair the handshake selected, not through the
+`0x66` sub-channel. Two things have to be true, and neither is visible in the SDP:
+
+1. **`SetAudioModeRequest` (`DisplayToController` #16) with `mode=2, f3=true`.** The firmware's
+   mode table maps 1, 2 and 4 to its audio paths and rejects 3 as
+   `Unsupported audio mode: UDP_PCM`; only mode 2 (the WebRTC Opus route) reaches the jack.
+   Send it before the first frame: without it the pad takes the packets and plays nothing.
+2. **Media on the media 5-tuple.** `0x66` carries input reports and RPCs. Audio pushed into it
+   is accepted by the socket and silently dropped by the firmware (measured on hardware).
+
+```
+Opus (20 ms, PT 111, 48 kHz stereo)
+  -> RTP        own SSRC and sequence numbers, timestamp = slot * 960
+  -> SRTP       srtp_out.protect_rtp(), keys from EXTRACTOR-dtls_srtp
+  -> UDP        the candidate ICE selected (endpoint.send_rtp_packet)
+```
+
+Three more details, each found by getting it wrong on a real controller:
+
+- **Own SSRC and sequence.** The input ACKs we send use `local_ssrc` / `tx_seq`. Sharing them
+  makes the controller see one stream whose sequence jumps backwards, which it counts as loss.
+- **Timestamps from the slot index.** ffmpeg starts at a random timestamp and does not hand
+  frames over on a 20 ms grid. `slot * 960` keeps the timeline the jitter buffer expects: a
+  slot with no frame stays a hole for it to conceal, instead of pulling the following frames
+  forward (which is audible as crackle).
+- **Pacing in the sender.** Frames are sent one per 20 ms slot, polling every 4 ms. Windows'
+  default timer granularity is 15.6 ms, so a plain `sleep(0.02)` degenerates into 20/31 ms.
+
 ## 6. The game session (`schemas/streamer_message.proto`, `game_session.py`)
 
 Game streaming is a second WebRTC session, and it is the only path to the rumble motors.
@@ -265,6 +295,8 @@ reboots is matched to its existing session, which is reset; other sessions are u
 - The identifiers of §10, the autolinking boot (offer inside `RegisterController`) and the
   display token echoed as the GMsg subscription.
 - The game session flow of §6, the InitializationResponse string limits, the haptics watchdog.
+- Headset audio: Opus over SRTP on the media 5-tuple, gated by `SetAudioMode(mode=2)`, with
+  its own SSRC, heard in the jack on a real controller.
 - Omaha and Clearcut message formats.
 - The certificate check: the chain must lead to a GTS root; hostname, validity dates and
   revocation are not checked (§8).

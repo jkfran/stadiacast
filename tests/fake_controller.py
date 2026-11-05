@@ -52,6 +52,7 @@ from stadiacast.rtc import (
     WIRE_IDS_DC_RPC,
     DtlsCertificate,
     RtcEndpoint,
+    RtpPacket,
     parse_rtp,
     parse_wire_message,
     random_ice_string,
@@ -137,6 +138,10 @@ class FakeController:
         self.discovery = None  # DiscoverDisplayResponse
         self.last_gmsg_id: int | None = None
         self.wire_dropped = 0  # records the firmware's WireHeader2 check would drop
+        # Headset audio arrives on the same 0x66 channel as input; the payload type tells
+        # them apart (the display's input RTP is --input-payload-type, 96 by default).
+        self.audio_frames: list[RtpPacket] = []
+        self.audio_payload_type = 111
         self.start_game_requests: list[dict] = []  # DisplayToController #8 StartGame {ticket, key, number}
         self._start_game_held: int | None = None  # ticket whose reply waits for GAME_STARTED / GAME_STOPPED
         self.app_state = "browse"  # browse | starting_game | in_game (the Yeti app)
@@ -534,6 +539,9 @@ class FakeController:
         return await self.rpc_call(req)
 
     def _on_rtp(self, pkt):
+        if pkt.payload_type == self.audio_payload_type:
+            self.audio_frames.append(pkt)
+            return
         self.rtp_in.put_nowait(pkt)
         try:
             m = self.protos.InputProtocolMessage()

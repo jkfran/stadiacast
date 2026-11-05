@@ -571,6 +571,21 @@ class RtcEndpoint(asyncio.DatagramProtocol):
         self.stats["rtp_out"] += 1
         return True
 
+    def send_rtp_packet(self, packet: bytes, *, protect: bool = True) -> bool:
+        """Send an already built RTP packet on the media 5-tuple.
+
+        Unlike :meth:`send_rtp` this leaves ``tx_seq`` and ``local_ssrc`` alone: the headset
+        audio stream numbers itself, and borrowing the input ACK counter would make the
+        controller see one stream whose sequence jumps backwards.
+        """
+        if not (self.remote and self.remote.selected):
+            return False
+        if protect and self.srtp_out:
+            packet = self.srtp_out.protect_rtp(packet)
+        self._send(packet, self.remote.selected)
+        self.stats["rtp_out"] = self.stats.get("rtp_out", 0) + 1
+        return True
+
     def send_rtcp_rr(self) -> bool:
         """Send a minimal empty RTCP Receiver Report (PT=201, no report blocks).
 

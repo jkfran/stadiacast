@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from google.protobuf.message import DecodeError
 
 from stadiacast import SERVER_NAME, signaling
+from stadiacast.audio import AudioSender, Source, source_from_spec
 from stadiacast.game_session import GameSession
 from stadiacast.gamepad import GamepadState
 from stadiacast.http_server import HttpResponse
@@ -125,6 +126,8 @@ class ControllerSession:
         self._rpc_ticket = 0
         self._rpc_pending: dict[int, str] = {}  # tickets of our requests -> purpose
         self._last_input: GamepadState | None = None  # previous ControllerToDisplay #3 report
+        self._audio: AudioSender | None = None  # headset jack, created on demand
+        self._audio_task: asyncio.Task[None] | None = None
 
     def __repr__(self) -> str:
         return f"ControllerSession({self.label}, key={self.key!r}, ip={self.ip!r})"
@@ -157,6 +160,7 @@ class ControllerSession:
             if task:
                 task.cancel()
         self._rtcp_task = self._display_task = self._display_fallback_task = None
+        self._stop_audio()
         self.game.close()
         self.endpoint.close()
 
@@ -183,6 +187,7 @@ class ControllerSession:
         self._rpc_ticket = 0
         self._last_input = None
         self.session["display"] = _fresh_display_session()
+        self._stop_audio()
         self.game.reset()
 
     def status(self) -> dict[str, Any]:
@@ -198,8 +203,90 @@ class ControllerSession:
             "input_stats": dict(self.input.stats),
             "local_ice": self.endpoint.local_params(),
             "udp": [self.cfg.advertise_ip, self.endpoint.local_port],
+            "playback": self.audio_state(),
             **self.game.status(),
         }
+
+    # ---- headset audio -------------------------------------------------------
+    def set_audio_mode(self, mode: int, f2: bool | None = None, f3: bool | None = None) -> dict[str, Any]:
+        """``DisplayToController`` #16 ``SetAudioModeRequest``: open the firmware's audio path.
+
+        The table is explicit in the firmware: mode 3 is rejected as
+        ``Unsupported audio mode: UDP_PCM``, modes 1, 2 and 4 map to audio paths 1, 2 and 3.
+        Only ``mode=2`` (the WebRTC Opus route) feeds the jack; without this request the
+        controller takes the RTP and plays nothing.
+        """
+        p = self.protos
+        msg = p.DisplayToController()
+        msg.set_audio_mode.mode = int(mode)
+        if f2 is not None:
+            msg.set_audio_mode.f2 = bool(f2)
+        if f3 is not None:
+            msg.set_audio_mode.f3 = bool(f3)
+        ticket = self.send_rpc("request", msg, purpose="set_audio_mode")
+        self.log("audio_mode_sent", mode=int(mode), f2=f2, f3=f3, ticket=ticket)
+        return {"ok": ticket is not None, "ticket": ticket, "mode": int(mode)}
+
+    async def audio_start(self, source: Source | None = None, *, srtp: bool = True) -> dict[str, Any]:
+        """Send audio to the headset jack until :meth:`audio_stop` (or the link goes away).
+
+        ``source=None`` starts the pacer with no encoder: the caller supplies the Opus frames
+        through :meth:`audio_feed`.  That is what the tests use, and what a caller with its
+        own encoder would do.
+        """
+        if self._audio is None:
+            self._audio = AudioSender(self.endpoint, log=self.log, srtp=srtp, bitrate_kbps=self.cfg.audio_bitrate_kbps)
+        switched: dict[str, Any] | None = None
+        if self.cfg.audio_mode:
+            switched = self.set_audio_mode(self.cfg.audio_mode, f3=True)
+        try:
+            info = await self._audio.start(source)
+        except Exception:
+            self._audio = None  # ffmpeg missing or the sound card refused the source
+            raise
+        return {**info, "audio_mode": switched} if switched is not None else info
+
+    async def audio_stop(self) -> dict[str, Any]:
+        sender, self._audio = self._audio, None
+        if sender is None:
+            return {"playing": False}
+        return await sender.stop()
+
+    def audio_feed(self, payload: bytes, marker: bool = False) -> None:
+        """One Opus frame into a running sender (only meaningful with ``audio_start(None)``)."""
+        if self._audio is None:
+            raise RuntimeError("audio is not running")
+        self._audio.enqueue(payload, marker)
+
+    def audio_state(self) -> dict[str, Any]:
+        if self._audio is None:
+            return {"playing": False}
+        return self._audio.state()
+
+    def _maybe_start_audio(self) -> None:
+        """``--audio-source``: start the stream once the display link reaches READY."""
+        if self._audio is not None or not self.cfg.audio_source:
+            return
+        try:
+            source = source_from_spec(self.cfg.audio_source)
+        except (RuntimeError, ValueError) as e:
+            self.log("audio_source_invalid", spec=self.cfg.audio_source, error=str(e))
+            return
+        self._audio_task = asyncio.get_running_loop().create_task(self._audio_autostart(source))
+
+    async def _audio_autostart(self, source: Source) -> None:
+        try:
+            await self.audio_start(source)
+        except Exception as e:  # no ffmpeg, no sound card: log it, never take the link down
+            self.log("audio_start_failed", error=repr(e))
+
+    def _stop_audio(self) -> None:
+        if self._audio_task is not None:
+            self._audio_task.cancel()
+            self._audio_task = None
+        sender, self._audio = self._audio, None
+        if sender is not None:
+            sender.kill_now()
 
     # ---- discovery RPCs ------------------------------------------------------------------
     def register(self, request: Any, extra: dict[str, Any]) -> tuple[Any, str]:
@@ -586,6 +673,7 @@ class ControllerSession:
             self.log("display_state", display_state=state, **info)
             if DISPLAY_STATES.index(state) >= DISPLAY_STATES.index("ready"):
                 self.game.maybe_start()
+                self._maybe_start_audio()
 
     def mark_input(self, via: str) -> None:
         """Input has arrived over ``via`` (the game session reports through here)."""

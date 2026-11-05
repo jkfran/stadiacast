@@ -66,6 +66,9 @@ class Config:
     rtcp_interval: float = 1.0  # display-side RTCP RR cadence after DTLS (0 disables)
     ack_mode: str = "rtp"  # rtp | none: echo InputProtocolMessage{ack_sequence_number}
     input_payload_type: int = 96
+    audio_source: str = ""  # '' off | tone | file:PATH: started once the display link is READY
+    audio_mode: int = 2  # SetAudioModeRequest before the stream: 2 = WebRTC Opus (the jack path), 0 = leave it alone
+    audio_bitrate_kbps: int = 64  # Opus encoder bitrate
 
     # -- display link (post-DTLS RPCs) -----------------------------------------------------
     display_rpc: str = "on"  # on | off
