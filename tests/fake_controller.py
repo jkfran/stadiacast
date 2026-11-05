@@ -138,8 +138,8 @@ class FakeController:
         self.discovery = None  # DiscoverDisplayResponse
         self.last_gmsg_id: int | None = None
         self.wire_dropped = 0  # records the firmware's WireHeader2 check would drop
-        # Headset audio arrives on the same 0x66 channel as input; the payload type tells
-        # them apart (the display's input RTP is --input-payload-type, 96 by default).
+        # Headset audio arrives as RTP on the media pair, like the display's input ACKs; the
+        # payload type tells them apart (the ACKs use --input-payload-type, 96 by default).
         self.audio_frames: list[RtpPacket] = []
         self.audio_payload_type = 111
         self.start_game_requests: list[dict] = []  # DisplayToController #8 StartGame {ticket, key, number}

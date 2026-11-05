@@ -44,7 +44,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from stadiacast.rtc.rtp import build_rtp, parse_rtp
 
@@ -68,15 +68,26 @@ def ffmpeg_path() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _raise_timer_resolution() -> None:
-    """Ask Windows for 1 ms timer granularity, so the pacer's 4 ms poll is honoured."""
+def _set_timer_resolution(raised: bool) -> bool:
+    """Ask Windows for 1 ms timer granularity while a stream runs, so the 4 ms poll is honoured.
+
+    Returns whether the call was made: ``timeBeginPeriod`` and ``timeEndPeriod`` must pair up.
+    """
     if sys.platform != "win32":
-        return
+        return False
     with contextlib.suppress(AttributeError, OSError):
         import ctypes
 
         winmm = ctypes.WinDLL("winmm")
-        winmm.timeBeginPeriod(1)
+        (winmm.timeBeginPeriod if raised else winmm.timeEndPeriod)(1)
+        return True
+    return False
+
+
+class RtpSink(Protocol):
+    """What the sender needs from an endpoint: :meth:`RtcEndpoint.send_rtp_packet`."""
+
+    def send_rtp_packet(self, packet: bytes, *, protect: bool = True) -> bool: ...
 
 
 # --------------------------------------------------------------------------- sources
@@ -183,7 +194,7 @@ class AudioSender:
 
     def __init__(
         self,
-        endpoint: Any,
+        endpoint: RtpSink | None,
         *,
         log: Callable[..., Any] | None = None,
         payload_type: int = 111,
@@ -214,6 +225,7 @@ class AudioSender:
         self._q: collections.deque[tuple[bytes, bool]] = collections.deque(maxlen=QUEUE_MAX)
         self._running = False
         self._last_send_at = 0.0
+        self._timer_raised = False
 
     # ---- lifecycle -----------------------------------------------------------
     async def start(self, source: Source | None = None) -> dict[str, Any]:
@@ -227,7 +239,7 @@ class AudioSender:
         self._q.clear()
         self._last_send_at = 0.0
         self.source = source
-        _raise_timer_resolution()
+        self._timer_raised = _set_timer_resolution(True)
         if source is not None:
             exe = ffmpeg_path()
             if exe is None:
@@ -249,6 +261,7 @@ class AudioSender:
 
     async def stop(self) -> dict[str, Any]:
         self._running = False
+        self._release_timer()
         await self._cancel_tasks()
         await self._kill_ffmpeg()
         if self._transport is not None:
@@ -269,6 +282,11 @@ class AudioSender:
                 await task
             setattr(self, name, None)
 
+    def _release_timer(self) -> None:
+        if self._timer_raised:
+            self._timer_raised = False
+            _set_timer_resolution(False)
+
     @property
     def playing(self) -> bool:
         return self._running
@@ -276,6 +294,7 @@ class AudioSender:
     def kill_now(self) -> None:
         """Tear down without awaiting: the event loop is going away."""
         self._running = False
+        self._release_timer()
         for name in ("_task", "_pacer"):
             task = getattr(self, name)
             if task is not None:
@@ -463,4 +482,4 @@ def source_from_spec(spec: str) -> Source:
     raise ValueError(f"unknown audio source {spec!r}; use tone or file:PATH")
 
 
-__all__ = ["SAMPLES_PER_FRAME", "AudioSender", "AudioStats", "Source", "ffmpeg_path", "source_from_spec"]
+__all__ = ["SAMPLES_PER_FRAME", "AudioSender", "AudioStats", "RtpSink", "Source", "ffmpeg_path", "source_from_spec"]

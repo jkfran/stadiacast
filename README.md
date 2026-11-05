@@ -157,7 +157,7 @@ The headset jack takes a separate media stream on the display link: Opus in RTP 
 protected with the SRTP keys the DTLS handshake negotiated, sent on the ICE pair it selected.
 Two things must happen first, and neither is in the SDP: the firmware has to be told
 `SetAudioMode(mode=2, f3=true)` (`DisplayToController` #16), and the media must go on the media
-5-tuple rather than the `0x66` sub-channel that carries input reports -- the pad accepts packets
+5-tuple rather than the `0x66` sub-channel that carries input reports: the pad accepts packets
 there and plays nothing. The stream keeps its own SSRC and sequence numbers instead of
 borrowing the endpoint's, which the input ACKs use.
 
@@ -184,6 +184,7 @@ its own capture and encoder drives it directly. How the frames are framed on the
 | `src/stadiacast/receiver.py` | the receiver: HTTP routing, boot-time endpoints, the registry of controller sessions |
 | `src/stadiacast/controller.py` | one controller's session: discovery RPCs, GMsg queue, signaling, display link, input |
 | `src/stadiacast/game_session.py` | the game-streaming session: StartGame, proxied RPCs, input, rumble |
+| `src/stadiacast/audio.py` | headset audio: Opus frames paced onto the display link's media pair (`--audio-source`) |
 | `src/stadiacast/http_server.py` | the HTTP/1.1 server shaped for the firmware's client |
 | `src/stadiacast/rtc/` | STUN, DTLS (pyOpenSSL), SRTP, RTP and WireHeader2 framing, one module each; `RtcEndpoint` ties them to a UDP socket |
 | `src/stadiacast/signaling.py` | the protobuf SDP offer / answer / candidate messages |

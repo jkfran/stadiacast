@@ -45,7 +45,7 @@ def test_file_source_puts_stream_loop_before_the_input() -> None:
 def test_sender_numbers_frames_on_its_own_grid() -> None:
     async def run() -> None:
         ep = _StubEndpoint()
-        sender = AudioSender(ep, srtp=False)  # type: ignore[arg-type]
+        sender = AudioSender(ep, srtp=False)
         await sender.start(None)  # no encoder: the frames come from the test
         try:
             for i in range(3):

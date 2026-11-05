@@ -33,6 +33,7 @@ Receiver                                   one per process (receiver.py)
       │    └── WireHeader2 framing         rtc/wire.py
       ├── display RPC state machine        GetControllerState → READY → input (controller.py)
       ├── InputDecoder                     InputProtocolMessage stream (input_protocol.py)
+      ├── AudioSender                      Opus to the headset jack, paced RTP on the media pair (audio.py)
       └── GameSession                      StartGame, proxied RPCs, rumble (game_session.py)
            ├── RtcEndpoint "game"          second UDP socket, own certificate
            └── InputDecoder
@@ -47,7 +48,9 @@ It is also the registry: `controller_for()` finds or creates the session for a r
 (`register`, `discover`), the GMsg queue and long poll (`queue_gmsg`, `gmsg_poll`), the
 signaling answer, the display-link endpoint and its callbacks, the post-DTLS RPC state machine
 (`_display_rpc_loop`, `_on_rpc`, `_answer_request`) and the input events. Its `session` dict is
-what `/_status` publishes; the `display` sub-dict is reset on every new boot.
+what `/_status` publishes; the `display` sub-dict is reset on every new boot. With
+`--audio-source` it also owns an `AudioSender` (`audio.py`): started once the display link is
+READY, it paces Opus frames onto the display link's media pair under the stream's own SSRC.
 
 **`GameSession`** is the game phase of one controller: it sends `StartGame`, answers the
 `InitializationRequest` the controller proxies through the display link, runs the second

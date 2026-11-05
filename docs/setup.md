@@ -195,6 +195,8 @@ Events worth knowing when something does not work:
 | `rpc_out_failed` | an RPC was attempted without a DTLS session |
 | `game_start_failed` | the controller refused `StartGame` (it was not in BROWSE) |
 | `rumble_refresh_failed` | the game session dropped while a rumble was held |
+| `audio_start_failed` | `--audio-source` was set but the stream could not start: no ffmpeg with libopus on `PATH`, or the source was refused |
+| `audio_source_invalid` | the `--audio-source` spelling is not `tone` or `file:PATH` |
 
 ## Wi-Fi provisioning over Bluetooth
 
