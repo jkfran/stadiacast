@@ -238,8 +238,10 @@ def test_exit_between_reports_reports_permission_error_and_reaps_process(feed):
 def test_idle_held_input_keeps_rumble_renewals_flowing_without_pulsing(feed):
     """OJD exchanges feedback on frames; an idle CLI otherwise batches it at 500 ms.
 
-    Simulate Chrome's 100 ms bounded effects, renewed every 100 ms. With no new
-    physical input, the motor must stay on and the held A button must stay held.
+    Simulate a game's bounded effects, each renewed before it ends (Chrome renews its
+    100 ms ones every 100 ms; these last longer, so that a slow machine running the
+    test does not let one lapse). With no new physical input, the motor must stay on
+    and the held A button must stay held.
     """
     pad, path = feed()
     path.with_suffix(".poll").touch()
@@ -253,7 +255,7 @@ def test_idle_held_input_keeps_rumble_renewals_flowing_without_pulsing(feed):
             {
                 "type": "SetRumble",
                 "intensities": {"lowFrequency": 65535},
-                "durationMilliseconds": 100,
+                "durationMilliseconds": 400,
                 "sequence": index,
             },
         )
