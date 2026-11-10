@@ -260,6 +260,11 @@ firmware then falls back to `8.8.8.8` and reaches the real host.) The receiver a
 Clearcut connection after the `LogResponse`, because a kept-alive connection there blocked
 the serial HTTP client from sending `ResolveDiscovery`.
 
+After a refused upload the firmware's HTTP client sends nothing for 12 to 15 s. On a wake that
+pause comes first, before `FirmwareVersionCheck`, and is most of the time a boot takes. When
+the upload comes later, as on a wake a few seconds after a power-off, the pause has fallen
+between DTLS and `ResolveDiscovery`, and READY came that much after the link.
+
 ## 8. Time
 
 The firmware syncs its clock from `time.google.com` over SNTP (the receiver's SNTP server
@@ -345,7 +350,9 @@ of the Wi-Fi scan, a list of `{ssid, bssid, frequency, signal_level, wpa_auth, w
 base64; an open network has none. `wpa_auth` and `wpa_cipher` name the network's security in
 the controller's own enums (`wpa_auth` 1 open, 2 WEP, 5 WPA-PSK, 7 WPA2-PSK; `wpa_cipher`
 1 none, 2 WEP, 3 TKIP, 4 CCMP) and have to match it. `bssid` and `frequency`, copied from a
-scan entry, may be added; without them the controller finds the network by its name.
+scan entry, may be added; without them the controller finds the network by its name. A scan
+has reported a macOS hotspot as `wpa_auth` 100 and `wpa_cipher` 100, and the controller joined
+it with those values as it does with 7 and 4.
 
 **States.** `0x14` and `0x16` are the start and the end of a scan. After the credentials come
 `0x1e` (connecting), then `0x3c` (connected) or `0x4f` (the credentials were refused or the
