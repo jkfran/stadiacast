@@ -46,15 +46,17 @@ def control():
         if exit_file.exists():
             print('Input Monitoring denied for the virtual HID device', file=sys.stderr, flush=True)
             os._exit(77)
-        if feedback_file.exists():
+        try:
             value = feedback_file.read_text()
-            if value and value != last:
-                if poll_file.exists():
-                    with lock:
-                        pending.append(value)
-                else:
-                    print(value, flush=True)
-                last = value
+        except OSError:  # not there yet, or on Windows being replaced right now
+            value = ''
+        if value and value != last:
+            if poll_file.exists():
+                with lock:
+                    pending.append(value)
+            else:
+                print(value, flush=True)
+            last = value
         time.sleep(0.005)
 threading.Thread(target=control, daemon=True).start()
 for line in sys.stdin:
