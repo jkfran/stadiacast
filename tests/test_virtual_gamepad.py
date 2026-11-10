@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from typing import ClassVar
 
 import pytest
@@ -312,3 +313,105 @@ def test_the_first_report_waits_for_the_plug_in() -> None:
     expected = r"within 0 s \(Error: VIGEM_ERROR_TARGET_NOT_PLUGGED_IN\).*Windows Server"
     with pytest.raises(SetupError, match=expected):
         wait_until_plugged_in(never, timeout=0.0, sleep=naps.append)
+
+
+def test_brief_tap_survives_async_pad_creation(tmp_path) -> None:
+    async def run() -> None:
+        started, finish = threading.Event(), threading.Event()
+
+        def delayed(label):
+            started.set()
+            assert finish.wait(3)
+            return _FakePad(label)
+
+        rx = _with_fake_pads(make_receiver(tmp_path), delayed)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            await wait_for(started.is_set)
+            pads.on_event({"controller": "c0", **GamepadState().as_event(None)})
+            finish.set()
+            await wait_for(lambda: _FakePad.created and len(_FakePad.created[0].applied) == 2)
+            assert [x["wButtons"] for x in _FakePad.created[0].applied] == [int(Button.A), 0]
+        finally:
+            finish.set()
+            tasks = list(pads._creating.values())
+            pads.close()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_shutdown_during_creation_reaps_the_late_pad(tmp_path) -> None:
+    async def run() -> None:
+        started, finish = threading.Event(), threading.Event()
+
+        def delayed(label):
+            started.set()
+            assert finish.wait(3)
+            return _FakePad(label)
+
+        rx = _with_fake_pads(make_receiver(tmp_path), delayed)
+        pads = rx.gamepads
+        pads.on_event({"controller": "c0", **GamepadState().as_event(None)})
+        await wait_for(started.is_set)
+        pads.close()
+        finish.set()
+        await pads.wait_closed()
+        assert len(_FakePad.created) == 1 and _FakePad.created[0].closed
+        assert pads.status() == {}
+
+    asyncio.run(run())
+
+
+def test_release_during_creation_does_not_replay_old_input(tmp_path) -> None:
+    async def run() -> None:
+        started, finish = threading.Event(), threading.Event()
+
+        def delayed(label):
+            started.set()
+            assert finish.wait(3)
+            return _FakePad(label)
+
+        rx = _with_fake_pads(make_receiver(tmp_path), delayed)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            await wait_for(started.is_set)
+            pads.release("c0")
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.B)).as_event(None)})
+            finish.set()
+            await wait_for(lambda: len(_FakePad.created) == 2 and _FakePad.created[1].applied)
+            assert _FakePad.created[0].closed and not _FakePad.created[0].applied
+            assert _FakePad.created[1].applied[0]["wButtons"] == int(Button.B)
+        finally:
+            finish.set()
+            tasks = list(pads._creating.values())
+            pads.close()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_async_backend_error_is_visible_without_another_input_report(tmp_path) -> None:
+    class FalliblePad(_FakePad):
+        def on_error(self, callback):
+            self.fail = callback
+
+    async def run() -> None:
+        rx = _with_fake_pads(make_receiver(tmp_path), FalliblePad)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState().as_event(None)})
+            await wait_for(lambda: _FakePad.created and _FakePad.created[0].applied)
+            pad = _FakePad.created[0]
+            pad.fail("OJD service stopped")
+            await wait_for(lambda: pads.status().get("c0", {}).get("error"))
+            assert pads.status() == {"c0": {"error": "OJD service stopped"}}
+            assert pad.closed
+            pads.release("c0")
+            assert pads.status() == {}
+        finally:
+            pads.close()
+
+    asyncio.run(run())

@@ -95,6 +95,17 @@ worker thread, forwards the motor levels a game sets to that controller's `GameS
 lets go of the pad's state when the controller reboots, which is also when a pad that could not
 be created is tried again.
 
+The macOS backend (`ojd_gamepad.py`) runs the signed OpenJoystickDriver app as `ojd virtual
+feed`, one subprocess per controller. Worker threads submit paced JSON frames and receive
+rumble feedback; an asynchronous failure callback reports a dead feed even without a new input
+event. A bounded queue keeps button/trigger transitions and coalesces stick-only updates. The
+backend converts XInput's Y-up sticks to OJD's Y-down coordinates and its 16-bit rumble feedback
+to the shared backend's byte levels. OJD owns the HID entitlement. The adapter repeats held
+input every 20 ms so the CLI exchanges feedback promptly even when the physical controls are
+still (its own idle cadence is 500 ms). Bounded rumble renewals have a 40 ms expiry allowance
+for exchange jitter; explicit stops stay immediate. On disconnect, its feed is closed;
+pending constructors are reaped on release/shutdown.
+
 **`RtcEndpoint`** is one UDP socket and one peer. It demultiplexes datagrams (STUN / DTLS /
 RTP), runs the connectivity checks and keepalives, drives the DTLS handshake through pyOpenSSL
 memory BIOs, exports SRTP keys, and delivers application data (`raw_dtls` sessions) or decrypted

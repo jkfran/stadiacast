@@ -32,6 +32,8 @@ vibrates on request and plays sound on its headset jack.
   run, wake the controller.
 - 🎮 **A PC gamepad on Windows.** Every controller becomes an Xbox 360 controller for your
   games, and the game's rumble reaches the controller.
+- 🍎 **macOS gamepad output.** An experimental OpenJoystickDriver bridge exposes each
+  controller to Mac games, with selectable SDL and Apple GameController profiles.
 - 🎧 **Headset audio.** What the PC plays, or any file, streams to a headset plugged into the
   controller.
 - 👥 **Several controllers at once**, each one its own player.
@@ -59,7 +61,8 @@ stadiacast --preset live --dns-upstream 192.168.1.1   # your router: the DNS sin
    ```
 
 3. **Start the receiver** with the command above; on Windows add `--gamepad vigem` for the
-   [virtual gamepad](#virtual-gamepad-windows). From a source checkout,
+   [virtual gamepad](#virtual-gamepad-windows), or on macOS use
+   [`--gamepad ojd`](#virtual-gamepad-macos-experimental). From a source checkout,
    `tools/start_receiver.sh` does the same in the background, with the settings of a `.env`
    file (see `.env.example`).
 4. **Wake the controller** with a ~1 s press of the Stadia button, released at the first
@@ -208,6 +211,61 @@ and Capture have no XInput equivalent. The game's rumble comes back to the contr
 the game session, which `--gamepad` starts for that reason. Two controllers are players 1 and
 2, and `/_status` lists the pads under `gamepads`.
 
+## Virtual gamepad (macOS, experimental)
+
+`--gamepad ojd` feeds each controller to the signed **OpenJoystickDriver** app through its
+`virtual feed` interface. Install
+[OpenJoystickDriver 0.6.0-alpha.1](https://github.com/xsyetopz/OpenJoystickDriver/releases/tag/0.6.0-alpha.1),
+the MIT-licensed release, into `/Applications`, and open it. It supports Apple silicon and Intel
+on macOS 12 or later. Allow **OpenJoystickDriver** in System Settings → Privacy & Security →
+**Input Monitoring**, and grant **Accessibility** if the app requests it. Keep the app running.
+Later OJD releases use a different license; the version linked here is the tested protocol target.
+
+```sh
+uv run stadiacast --preset live --dns-upstream "$ROUTER" --advertise-ip "$MAC_IP" \
+  --gamepad ojd --gamepad-profile game-controller-compatible
+```
+
+Stadiacast finds `ojd` on `PATH` or the app in `/Applications` or `~/Applications`; installing
+OJD's command-line symlink is optional. `--ojd-path PATH` selects another executable.
+
+Choose the profile for the application, then restart the receiver and wake the controller:
+
+| `--gamepad-profile` | initial target |
+|---|---|
+| `game-controller-compatible` (default) | Apple's GameController framework and compatible SDL games; Xbox Wireless Controller identity |
+| `sdl-compatible` | alternative for Steam and SDL-based emulators; Xbox Adaptive Controller identity |
+| `generic` | applications with configurable raw-HID bindings |
+
+Check the layout in the actual game or browser: recognition and mappings differ between input
+APIs, including in CrossOver. OJD is alpha software. On macOS 15.8.2 arm64, synthetic input
+worked through system HID, Apple's GameController framework, Chrome's standard Gamepad API,
+and Moonlight's bundled SDL2. The default profile also returned SDL2 rumble. The SDL-compatible
+profile enumerated but delivered no input through that SDL2 build; the generic profile worked with an explicit SDL
+mapping but did not provide rumble. These probes do not establish compatibility with every game.
+
+For an SDL application that needs an explicit mapping, install OJD's CLI from its Settings,
+then obtain the selected profile's mapping with `ojd virtual export-mapping generic` (or the
+profile you chose) and pass it to the application's `SDL_GAMECONTROLLERCONFIG` environment.
+
+Buttons, D-pad, both sticks and separate analog triggers are forwarded. Stadia becomes Guide;
+Assistant and Capture are omitted by the shared XInput mapping. `--gamepad-deadzone off` sends
+raw sticks. Rumble comes back through the game session, which `--gamepad` starts automatically.
+
+Each controller owns one feed (OJD allows four CLI feeds). The feed closes on disconnect and is
+created again on the next boot/input. Pipe I/O runs off the receiver's event loop; stick-only
+updates are coalesced during bursts, while button and trigger transitions retain their order.
+OJD holds every frame for at least 8 ms; Stadiacast paces submissions at up to 100 Hz.
+When the controls are still, their held state is repeated every 20 ms to keep rumble feedback
+flowing: OJD's 500 ms idle feedback cadence otherwise batches Chrome's 100 ms effect renewals
+into short pulses. Bounded effects allow 40 ms of renewal jitter; explicit stop commands stop
+immediately.
+
+`/_status` includes each pad's `kind`, `profile`, submitted `frames`, `rumbles`, and any `error`;
+`slot` is `null` on macOS. A `gamepad_created` record means the feed process started; an OJD
+permission or service failure produces `gamepad_failed`, even if no more input arrives. After
+fixing the reported issue, reboot the controller to retry.
+
 ## Development
 
 ```sh
@@ -223,8 +281,8 @@ against a receiver in lab mode, and how to test against a real controller safely
 
 1. **First-boot autoconnect:** detect a controller in BLE setup mode and provision it onto the
    network automatically (today `stadiacast-provision` is the manual version).
-2. **Virtual gamepad on Linux and macOS:** Windows has one (`--gamepad vigem`); Linux (uinput)
-   and macOS are open.
+2. **Virtual gamepad on Linux:** Windows has ViGEm and macOS has the experimental OJD bridge;
+   Linux (uinput) is open. Broader macOS game compatibility testing is welcome.
 
 ## Security and privacy
 

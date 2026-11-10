@@ -175,6 +175,7 @@ class Receiver:
             ctl.stop()
         if self.gamepads is not None:
             self.gamepads.close()
+            await self.gamepads.wait_closed()
         await self.http.stop()
         for watcher in self._helper_watchers:  # a helper stopped here is no news
             watcher.cancel()

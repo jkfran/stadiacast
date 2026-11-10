@@ -279,9 +279,9 @@ def build_parser(preset: str | None = None) -> argparse.ArgumentParser:
     g = ap.add_argument_group("virtual gamepad")
     g.add_argument(
         "--gamepad",
-        choices=("off", "vigem"),
+        choices=("off", "vigem", "ojd"),
         default="off",
-        help="feed the input to a virtual Xbox 360 pad on this PC, one per controller (vigem: Windows, ViGEmBus); "
+        help="feed input to a virtual pad, one per controller (vigem: Windows; ojd: macOS OpenJoystickDriver); "
         "switches StartGame on so the game's rumble reaches the controller",
     )
     g.add_argument(
@@ -289,6 +289,15 @@ def build_parser(preset: str | None = None) -> argparse.ArgumentParser:
         choices=("on", "off"),
         default="on",
         help="apply XInput's stick deadzones to the virtual pad (off: raw sticks)",
+    )
+    g.add_argument(
+        "--gamepad-profile",
+        choices=("sdl-compatible", "game-controller-compatible", "generic"),
+        default="game-controller-compatible",
+        help="OJD virtual controller identity (default: game-controller-compatible for Apple's controller framework)",
+    )
+    g.add_argument(
+        "--ojd-path", default="", help="OJD executable (default: find ojd on PATH or the installed macOS app)"
     )
 
     g = ap.add_argument_group("display link")
@@ -461,6 +470,8 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
         audio_follow_volume=a.audio_follow_volume == "on",
         gamepad=a.gamepad,
         gamepad_deadzone=a.gamepad_deadzone == "on",
+        gamepad_profile=a.gamepad_profile,
+        ojd_path=a.ojd_path,
         audio_mode=a.audio_mode,
         display_rpc=a.display_rpc,
         display_rpc_trigger=a.display_rpc_trigger,

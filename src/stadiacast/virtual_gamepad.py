@@ -1,4 +1,4 @@
-"""A virtual Xbox 360 gamepad per controller, for the games on the receiver's PC (Windows, ViGEmBus).
+"""A virtual gamepad per controller (Windows ViGEmBus or macOS OpenJoystickDriver).
 
 ``--gamepad vigem`` creates one ViGEm pad per controller through ``vgamepad`` (the ``gamepad``
 extra, over the ViGEmBus driver), feeds every decoded input report to it as XInput fields, and
@@ -18,11 +18,13 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from stadiacast.errors import SetupError
 from stadiacast.gamepad import XINPUT_LEFT_DEADZONE, XINPUT_RIGHT_DEADZONE, GamepadState
+from stadiacast.ojd_gamepad import OJDPad, find_ojd
 
 if TYPE_CHECKING:
     from stadiacast.config import Config
@@ -219,7 +221,9 @@ class VirtualGamepads:
         self._factory = backend_factory
         self._pads: dict[str, PadBackend] = {}
         self._creating: dict[str, asyncio.Task[None]] = {}
-        self._pending: dict[str, GamepadState] = {}
+        self._pending: dict[str, deque[GamepadState]] = {}
+        self._generation: dict[str, int] = {}
+        self._closed = False
         self._frames: dict[str, int] = {}
         self._rumbles: dict[str, int] = {}
         self._failed: dict[str, str] = {}  # label -> why its pad could not be created, until release()
@@ -228,8 +232,13 @@ class VirtualGamepads:
     @classmethod
     def create(cls, cfg: Config, log: Callable[..., Any], rx: Receiver) -> VirtualGamepads:
         """The backend ``--gamepad`` names, or a :class:`SetupError` saying what to install."""
+        if cfg.gamepad == "ojd":
+            if sys.platform != "darwin":
+                raise SetupError("--gamepad ojd is macOS only: it uses the signed OpenJoystickDriver app")
+            executable = find_ojd(cfg.ojd_path)
+            return cls(cfg, log, rx, lambda label: OJDPad(label, executable, cfg.gamepad_profile), kind="ojd")
         if cfg.gamepad != "vigem":
-            raise ValueError(f"unknown --gamepad {cfg.gamepad!r}; use off or vigem")
+            raise ValueError(f"unknown --gamepad {cfg.gamepad!r}; use off, vigem or ojd")
         if sys.platform != "win32":
             raise SetupError("--gamepad vigem is Windows only: it drives the ViGEmBus driver through vgamepad")
         try:
@@ -252,42 +261,95 @@ class VirtualGamepads:
         reports carry ``axes``; the game session's keyboard, mouse and feedback events do not.
         """
         label = str(ev.get("controller") or "")
-        if not label or label in self._failed or "axes" not in ev:
+        if self._closed or not label or label in self._failed or "axes" not in ev:
             return
         state = GamepadState.from_event(ev)
         pad = self._pads.get(label)
         if pad is None:
-            self._pending[label] = state  # applied as soon as the pad exists
+            pending = self._pending.setdefault(label, deque())
+            if pending and (pending[-1].buttons, pending[-1].l2, pending[-1].r2) == (state.buttons, state.l2, state.r2):
+                pending[-1] = state
+            elif len(pending) < 32:
+                pending.append(state)  # retain brief presses/releases while a pad is being created
+            else:
+                self._creation_failed(label, SetupError("too many input transitions while creating the virtual pad"))
+                return
             if label not in self._creating:
                 self._creating[label] = asyncio.get_running_loop().create_task(self._create(label))
             return
-        pad.apply(state.to_xinput(*self._dz))
+        self._apply(label, pad, state)
+
+    def _apply(self, label: str, pad: PadBackend, state: GamepadState) -> None:
+        try:
+            pad.apply(state.to_xinput(*self._dz))
+        except Exception as e:
+            self._backend_failed(label, pad, str(e))
+            return
         self._frames[label] = self._frames.get(label, 0) + 1
 
+    def _creation_failed(self, label: str, error: Exception) -> None:
+        message = str(error) if isinstance(error, SetupError) else repr(error)
+        self._failed[label] = message
+        self._pending.pop(label, None)
+        self.log("gamepad_failed", controller=label, error=message)
+
+    def _backend_failed(self, label: str, pad: PadBackend, error: str) -> None:
+        if self._closed or self._pads.get(label) is not pad:
+            return  # a callback from an already released feed
+        self._rumble(label, 0, 0)
+        self._pads.pop(label)
+        self._failed[label] = error
+        self.log("gamepad_failed", controller=label, error=error)
+        self._close_pad(label, pad)
+
     async def _create(self, label: str) -> None:
+        generation = self._generation.get(label, 0)
+        factory = asyncio.create_task(asyncio.to_thread(self._factory, label))
         try:
-            pad = await asyncio.to_thread(self._factory, label)
-        except Exception as e:  # ViGEm refused, or Windows never plugged the pad in: no pad until release()
-            error = str(e) if isinstance(e, SetupError) else repr(e)  # our own wording stays plain text
-            self._failed[label] = error
-            self.log("gamepad_failed", controller=label, error=error)
+            pad = await asyncio.shield(factory)
+        except asyncio.CancelledError:
+            # Cancelling to_thread cannot stop a constructor. Reap the device it
+            # eventually returns instead of leaking it after receiver shutdown.
+            try:
+                pad = await factory
+            except Exception:
+                pass
+            else:
+                self._close_pad(label, pad)
+            raise
+        except Exception as e:
+            if not self._closed and generation == self._generation.get(label, 0):
+                self._creation_failed(label, e)
             return
         finally:
             self._creating.pop(label, None)
+        if self._closed or label in self._failed or generation != self._generation.get(label, 0):
+            self._close_pad(label, pad)
+            if not self._closed and label not in self._failed and label in self._pending:
+                self._creating[label] = asyncio.create_task(self._create(label))
+            return
         self._pads[label] = pad
         self._frames.setdefault(label, 0)
         self._rumbles.setdefault(label, 0)
         loop = asyncio.get_running_loop()
 
         def forward(large: int, small: int) -> None:  # from ViGEm's thread onto the loop
-            loop.call_soon_threadsafe(self._rumble, label, large, small)
+            loop.call_soon_threadsafe(forward_if_current, large, small)
+
+        def forward_if_current(large: int, small: int) -> None:
+            if not self._closed and self._pads.get(label) is pad:
+                self._rumble(label, large, small)
 
         pad.on_rumble(forward)
+        # Subprocess-backed pads can fail between reports, including while idle.
+        on_error = getattr(pad, "on_error", None)
+        if on_error is not None:
+            on_error(lambda error: loop.call_soon_threadsafe(self._backend_failed, label, pad, error))
         self.log("gamepad_created", controller=label, kind=self.kind, slot=pad.slot, deadzone=self.cfg.gamepad_deadzone)
-        state = self._pending.pop(label, None)
-        if state is not None:
-            pad.apply(state.to_xinput(*self._dz))
-            self._frames[label] += 1
+        for state in self._pending.pop(label, ()):
+            self._apply(label, pad, state)
+            if label in self._failed:
+                break
 
     # ---- rumble ----------------------------------------------------------------------
     def _rumble(self, label: str, large: int, small: int) -> None:
@@ -311,22 +373,38 @@ class VirtualGamepads:
         A pad that could not be created is forgotten too, so the controller's next report tries
         again: rebooting the controller is how a user retries a pad ViGEm refused.
         """
+        self._generation[label] = self._generation.get(label, 0) + 1
         pad = self._pads.get(label)
         if pad is not None:
-            pad.reset()
+            if self.kind == "ojd":
+                self._pads.pop(label)
+                self._close_pad(label, pad)  # close the feed and release OJD's limited slots
+            else:
+                try:
+                    pad.reset()
+                except Exception as e:
+                    self._backend_failed(label, pad, str(e))
         self._pending.pop(label, None)
         self._failed.pop(label, None)
 
     def close(self) -> None:
-        for task in self._creating.values():
-            task.cancel()
-        self._creating.clear()
+        self._closed = True
+        # Constructors running in threads cannot be cancelled. _create sees
+        # _closed and disposes of their results; wait_closed joins those tasks
+        # before asyncio shuts down its executor and cancels pending futures.
         for label, pad in list(self._pads.items()):
-            try:
-                pad.close()
-            except Exception as e:  # ViGEm may already be gone at shutdown
-                self.log("gamepad_close_failed", controller=label, error=repr(e))
+            self._close_pad(label, pad)
         self._pads.clear()
+        self._pending.clear()
+
+    async def wait_closed(self) -> None:
+        await asyncio.gather(*list(self._creating.values()), return_exceptions=True)
+
+    def _close_pad(self, label: str, pad: PadBackend) -> None:
+        try:
+            pad.close()
+        except Exception as e:
+            self.log("gamepad_close_failed", controller=label, error=repr(e))
 
     def status(self) -> dict[str, Any]:
         """Per label: the pad's XInput ``slot`` and its counters, or the ``error`` its creation ended in."""
@@ -335,6 +413,9 @@ class VirtualGamepads:
             for label, pad in self._pads.items()
         }
         out.update({label: {"error": error} for label, error in self._failed.items()})
+        if self.kind == "ojd":
+            for value in out.values():
+                value.update(kind="ojd", profile=self.cfg.gamepad_profile)
         return out
 
 
