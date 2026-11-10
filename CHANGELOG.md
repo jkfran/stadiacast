@@ -6,9 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Provisioning that says how it ended and works without the controller's Wi-Fi scan, a receiver
-that lets go of a controller that was switched off, and limits on what one request, datagram or
-device on the network can cost it.
+## [1.1.0] - 2026-11-10
+
+A virtual gamepad on macOS, provisioning that says how it ended and works without the
+controller's Wi-Fi scan, a receiver that lets go of a controller that was switched off, and
+limits on what one request, datagram or device on the network can cost it.
 
 ### Added
 - A virtual gamepad on macOS: `--gamepad ojd` turns each controller into an Xbox controller for
@@ -175,7 +177,8 @@ confirmed against real controllers running the last Wi-Fi firmware, `ota.282115`
   security policy, code of conduct.
 - MIT License, with a `NOTICE` for the three protobuf schemas reproduced from the firmware.
 
-[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jkfran/stadiacast/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jkfran/stadiacast/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jkfran/stadiacast/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/jkfran/stadiacast/releases/tag/v0.1.0
