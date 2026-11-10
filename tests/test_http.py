@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import sys
 import time
 
 import pytest
@@ -193,7 +194,12 @@ def test_a_response_nobody_reads_is_given_up_after_the_idle_timeout(tmp_path):
             writer.close()
         finally:
             await srv.stop()
-        assert [r["stalled"] for r in log.records if r["event"] == "http_idle_timeout"] == [True]
+        gave_up = [r for r in log.records if r["event"] == "http_idle_timeout"]
+        assert len(gave_up) == 1
+        # Windows takes one send into its buffers whatever its size, so the response does not stall
+        # there: the connection is given up waiting for a next request instead.
+        if sys.platform != "win32":
+            assert gave_up[0]["stalled"] is True
 
     asyncio.run(run())
 

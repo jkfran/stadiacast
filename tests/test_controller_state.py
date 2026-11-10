@@ -37,8 +37,9 @@ def test_hardware_battery_and_headset_reach_the_status(tmp_path) -> None:
             assert cs.session["display"]["audio_mode"] == 1
             fc.send_audio_config(0)
             await wait_for(lambda: cs.status()["headset"] is False)
-            assert rx.log.counts["controller_audio_config"] == 2
-            assert rx.log.records[-1]["audio"]["device_info"]["f6"] == 9989
+            audio = [r for r in rx.log.records if r["event"] == "controller_audio_config"]
+            assert len(audio) == 2  # other records may follow: the periodic ones are not ours to time
+            assert audio[-1]["audio"]["device_info"]["f6"] == 9989
         finally:
             fc.close()
             await rx.stop()
