@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-10
+
+A wake connects about 15 seconds sooner: the controller no longer waits on the analytics
+upload that the receiver refuses.
+
 ### Fixed
 - A wake took about 15 s longer than it had to. The receiver refuses the controller's analytics
   upload, and it did so by closing the connection, after which the firmware waits 12 to 15 s
@@ -185,7 +190,8 @@ confirmed against real controllers running the last Wi-Fi firmware, `ota.282115`
   security policy, code of conduct.
 - MIT License, with a `NOTICE` for the three protobuf schemas reproduced from the firmware.
 
-[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/jkfran/stadiacast/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jkfran/stadiacast/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jkfran/stadiacast/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jkfran/stadiacast/compare/v0.1.0...v1.0.0

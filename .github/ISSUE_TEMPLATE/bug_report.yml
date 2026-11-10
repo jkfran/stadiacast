@@ -26,7 +26,7 @@ body:
     attributes:
       label: Stadiacast version
       description: Output of `stadiacast --version`, or the commit.
-      placeholder: stadiacast 1.1.0
+      placeholder: stadiacast 1.1.1
   - type: input
     id: firmware
     attributes:
