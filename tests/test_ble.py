@@ -610,14 +610,16 @@ def test_main_reports_a_failed_provisioning_in_one_line(fake_ble, capsys):
     [
         (TimeoutError(), "timed out"),
         (OSError("The object has been closed."), "The object has been closed."),
-        (ble.BleakError("Bluetooth device is turned off") if ble.BLEAK_AVAILABLE else None, "is turned off"),
+        (OSError(5, "Input/output error"), "[Errno 5] Input/output error"),
+        (ble.BleakError("Bluetooth device is turned off"), "Bluetooth device is turned off"),
+        # the shape of bleak's "Bluetooth is not available" error: a message and a reason
+        (ble.BleakError("No Bluetooth adapter found", 1), "No Bluetooth adapter found"),
     ],
 )
 def test_main_reports_a_connection_that_fails_in_one_line(fake_ble, capsys, error, said):
     fake_ble.connect_error = error
     assert ble.main(["provision", "-a", ADDRESS, "-s", "hotspot", "-p", "hunter22"]) == 1
-    err = capsys.readouterr().err
-    assert err == f"stadiacast-provision: Bluetooth: {error if str(error) else said}\n" and said in err
+    assert capsys.readouterr().err == f"stadiacast-provision: Bluetooth: {said}\n"
 
 
 def test_main_exits_130_when_interrupted(monkeypatch, capsys):

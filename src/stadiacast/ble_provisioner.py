@@ -204,9 +204,11 @@ def is_stadia_advertiser(device: Any, adv: Any) -> bool:
 
 
 def describe(error: BaseException) -> str:
-    """A Bluetooth error in a few words: some arrive without a message."""
+    """A Bluetooth error in a few words: some arrive without a message, some with more than one."""
     if isinstance(error, TimeoutError) and not str(error):
         return "timed out"
+    if type(error).__str__ is BaseException.__str__ and len(error.args) > 1 and isinstance(error.args[0], str):
+        return error.args[0]  # "no Bluetooth adapter" and its like carry (message, reason): the message
     return str(error) or type(error).__name__
 
 
