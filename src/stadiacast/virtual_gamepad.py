@@ -9,6 +9,9 @@ display link and, once a game runs, from the game session; both read into the sa
 only by its own reports. A pad that cannot be created shows its error in ``/_status`` and is
 tried again on the controller's next report after it reboots.
 
+``--gamepad ojd`` is the same on macOS, where the pad is a feed process of the OpenJoystickDriver
+app (:mod:`stadiacast.ojd_gamepad`) and is closed when its controller goes away.
+
 :class:`PadBackend` is the small surface the receiver drives, so the tests run the same code
 against a fake pad on every platform.
 """
@@ -52,6 +55,15 @@ BUTTON_BITS: dict[int, str] = {
 
 #: XInput motor levels are 0..255; the controller's take 0..65535.
 MOTOR_SCALE = 257
+
+#: Button and trigger changes kept in order for a pad that is still being created, so a tap made
+#: in that time is played back. Past this many the newest state stands for all of them.
+PENDING_TRANSITIONS = 32
+
+
+def _wording(error: Exception) -> str:
+    """An error for the log and ``/_status``: our own wording as plain text, a driver's as its repr."""
+    return str(error) if isinstance(error, SetupError) else repr(error)
 
 
 class PadBackend(Protocol):
@@ -213,14 +225,20 @@ class VirtualGamepads:
         backend_factory: Callable[[str], PadBackend],
         *,
         kind: str = "vigem",
+        per_boot: bool = False,
     ) -> None:
         self.cfg = cfg
         self.log = log
         self.rx = rx
         self.kind = kind
+        #: A pad lives for one boot of its controller and is closed when the controller goes away
+        #: (an OJD feed is one of four), where a ViGEm pad, which takes seconds to create, stays
+        #: and is only let go of.
+        self._per_boot = per_boot
         self._factory = backend_factory
         self._pads: dict[str, PadBackend] = {}
         self._creating: dict[str, asyncio.Task[None]] = {}
+        self._closing: set[asyncio.Task[None]] = set()  # pads being closed in a worker thread
         self._pending: dict[str, deque[GamepadState]] = {}
         self._generation: dict[str, int] = {}
         self._closed = False
@@ -236,7 +254,9 @@ class VirtualGamepads:
             if sys.platform != "darwin":
                 raise SetupError("--gamepad ojd is macOS only: it uses the signed OpenJoystickDriver app")
             executable = find_ojd(cfg.ojd_path)
-            return cls(cfg, log, rx, lambda label: OJDPad(label, executable, cfg.gamepad_profile), kind="ojd")
+            return cls(
+                cfg, log, rx, lambda label: OJDPad(label, executable, cfg.gamepad_profile), kind="ojd", per_boot=True
+            )
         if cfg.gamepad != "vigem":
             raise ValueError(f"unknown --gamepad {cfg.gamepad!r}; use off, vigem or ojd")
         if sys.platform != "win32":
@@ -269,26 +289,30 @@ class VirtualGamepads:
             pending = self._pending.setdefault(label, deque())
             if pending and (pending[-1].buttons, pending[-1].l2, pending[-1].r2) == (state.buttons, state.l2, state.r2):
                 pending[-1] = state
-            elif len(pending) < 32:
+            elif len(pending) < PENDING_TRANSITIONS:
                 pending.append(state)  # retain brief presses/releases while a pad is being created
             else:
-                self._creation_failed(label, SetupError("too many input transitions while creating the virtual pad"))
-                return
+                # More than is worth playing back (a ViGEm pad takes seconds to appear): the newest
+                # state stands for all of it, which lets go of whatever was pressed on the way.
+                pending.clear()
+                pending.append(state)
             if label not in self._creating:
-                self._creating[label] = asyncio.get_running_loop().create_task(self._create(label))
+                self._creating[label] = asyncio.get_running_loop().create_task(
+                    self._create(label, self._generation.get(label, 0))
+                )
             return
         self._apply(label, pad, state)
 
     def _apply(self, label: str, pad: PadBackend, state: GamepadState) -> None:
         try:
             pad.apply(state.to_xinput(*self._dz))
-        except Exception as e:
+        except SetupError as e:  # the pad's own word that it is done: a feed that ended or cannot keep up
             self._backend_failed(label, pad, str(e))
             return
         self._frames[label] = self._frames.get(label, 0) + 1
 
     def _creation_failed(self, label: str, error: Exception) -> None:
-        message = str(error) if isinstance(error, SetupError) else repr(error)
+        message = _wording(error)
         self._failed[label] = message
         self._pending.pop(label, None)
         self.log("gamepad_failed", controller=label, error=message)
@@ -302,31 +326,46 @@ class VirtualGamepads:
         self.log("gamepad_failed", controller=label, error=error)
         self._close_pad(label, pad)
 
-    async def _create(self, label: str) -> None:
-        generation = self._generation.get(label, 0)
+    async def _create(self, label: str, generation: int, after: asyncio.Task[None] | None = None) -> None:
+        """Build the pad for ``label`` in a worker thread, then keep it or let it go.
+
+        ``generation`` is the label's count of releases when the pad was asked for. A pad that
+        lives for one boot and is ready only after its controller went away is nobody's: it is
+        closed, and built again when the controller is back and its input waits."""
+        if after is not None:  # the pad this one replaces is still being closed
+            await asyncio.wait([after])
+        if self._closed:
+            self._creating.pop(label, None)
+            return
         factory = asyncio.create_task(asyncio.to_thread(self._factory, label))
+        pad: PadBackend | None = None
+        error: Exception | None = None
         try:
             pad = await asyncio.shield(factory)
         except asyncio.CancelledError:
             # Cancelling to_thread cannot stop a constructor. Reap the device it
             # eventually returns instead of leaking it after receiver shutdown.
             try:
-                pad = await factory
+                late = await factory
             except Exception:
                 pass
             else:
-                self._close_pad(label, pad)
+                self._close_pad(label, late)
             raise
-        except Exception as e:
-            if not self._closed and generation == self._generation.get(label, 0):
-                self._creation_failed(label, e)
-            return
+        except Exception as e:  # ViGEm refused, Windows never plugged the pad in, the driver did not start
+            error = e
         finally:
             self._creating.pop(label, None)
-        if self._closed or label in self._failed or generation != self._generation.get(label, 0):
-            self._close_pad(label, pad)
-            if not self._closed and label not in self._failed and label in self._pending:
-                self._creating[label] = asyncio.create_task(self._create(label))
+        stale = self._per_boot and generation != self._generation.get(label, 0)
+        if self._closed or stale:
+            closing = self._close_pad(label, pad) if pad is not None else None
+            if not self._closed and label in self._pending and label not in self._failed:
+                again = self._create(label, self._generation.get(label, 0), closing)
+                self._creating[label] = asyncio.create_task(again)
+            return
+        if pad is None:
+            assert error is not None
+            self._creation_failed(label, error)  # no pad until release()
             return
         self._pads[label] = pad
         self._frames.setdefault(label, 0)
@@ -376,14 +415,14 @@ class VirtualGamepads:
         self._generation[label] = self._generation.get(label, 0) + 1
         pad = self._pads.get(label)
         if pad is not None:
-            if self.kind == "ojd":
+            if self._per_boot:
                 self._pads.pop(label)
                 self._close_pad(label, pad)  # close the feed and release OJD's limited slots
             else:
                 try:
                     pad.reset()
-                except Exception as e:
-                    self._backend_failed(label, pad, str(e))
+                except Exception as e:  # a pad its driver has dropped: the next report gets a new one
+                    self._backend_failed(label, pad, _wording(e))
         self._pending.pop(label, None)
         self._failed.pop(label, None)
 
@@ -398,11 +437,33 @@ class VirtualGamepads:
         self._pending.clear()
 
     async def wait_closed(self) -> None:
+        """Wait for what worker threads still hold: pads being created, then pads being closed."""
         await asyncio.gather(*list(self._creating.values()), return_exceptions=True)
+        await asyncio.gather(*list(self._closing), return_exceptions=True)
 
-    def _close_pad(self, label: str, pad: PadBackend) -> None:
+    def _close_pad(self, label: str, pad: PadBackend) -> asyncio.Task[None] | None:
+        """Close a pad. One whose ``close`` waits (``close_blocks``: a feed process to see out) is
+        closed in a worker thread, and the task that follows it is returned: the event loop it
+        would hold up carries every controller's traffic."""
+        if getattr(pad, "close_blocks", False):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:  # no loop to hold up
+                pass
+            else:
+                task = loop.create_task(self._close_in_thread(label, pad))
+                self._closing.add(task)
+                task.add_done_callback(self._closing.discard)
+                return task
         try:
             pad.close()
+        except Exception as e:
+            self.log("gamepad_close_failed", controller=label, error=repr(e))
+        return None
+
+    async def _close_in_thread(self, label: str, pad: PadBackend) -> None:
+        try:
+            await asyncio.to_thread(pad.close)
         except Exception as e:
             self.log("gamepad_close_failed", controller=label, error=repr(e))
 

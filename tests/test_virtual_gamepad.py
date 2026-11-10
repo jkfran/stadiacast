@@ -15,7 +15,13 @@ from stadiacast.gamepad import Button, GamepadState
 from stadiacast.input_protocol import InputDecoder
 from stadiacast.log import EventLog
 from stadiacast.protos import Protos
-from stadiacast.virtual_gamepad import BUTTON_BITS, MOTOR_SCALE, VirtualGamepads, wait_until_plugged_in
+from stadiacast.virtual_gamepad import (
+    BUTTON_BITS,
+    MOTOR_SCALE,
+    PENDING_TRANSITIONS,
+    VirtualGamepads,
+    wait_until_plugged_in,
+)
 from tests.fake_controller import FakeController
 from tests.helpers import connect_firmware_flow, fake, make_receiver, no_log, single, wait_for
 
@@ -47,10 +53,10 @@ class _FakePad:
         self.closed = True
 
 
-def _with_fake_pads(rx, factory=_FakePad):
+def _with_fake_pads(rx, factory=_FakePad, **kw):
     _FakePad.created.clear()
     rx.cfg.gamepad_deadzone = True
-    rx.gamepads = VirtualGamepads(rx.cfg, rx.log, rx, factory)
+    rx.gamepads = VirtualGamepads(rx.cfg, rx.log, rx, factory, **kw)
     return rx
 
 
@@ -364,16 +370,53 @@ def test_shutdown_during_creation_reaps_the_late_pad(tmp_path) -> None:
     asyncio.run(run())
 
 
-def test_release_during_creation_does_not_replay_old_input(tmp_path) -> None:
+def _slow_factory():
+    """A pad factory that waits until the test lets it finish, as a ViGEm pad takes its seconds."""
+    started, finish = threading.Event(), threading.Event()
+
+    def delayed(label):
+        started.set()
+        assert finish.wait(3)
+        return _FakePad(label)
+
+    return delayed, started, finish
+
+
+def test_a_pad_that_stays_is_kept_when_its_controller_reboots_while_it_is_created(tmp_path) -> None:
+    """A ViGEm pad takes seconds to create and outlives its controller's boots. One that is still
+    being created when the controller reboots is that controller's pad all the same: building a
+    second one would double the wait and move the XInput players. What was pressed before the
+    reboot is not played."""
+
     async def run() -> None:
-        started, finish = threading.Event(), threading.Event()
-
-        def delayed(label):
-            started.set()
-            assert finish.wait(3)
-            return _FakePad(label)
-
+        delayed, started, finish = _slow_factory()
         rx = _with_fake_pads(make_receiver(tmp_path), delayed)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            await wait_for(started.is_set)
+            pads.release("c0")
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.B)).as_event(None)})
+            finish.set()
+            await wait_for(lambda: _FakePad.created and _FakePad.created[0].applied)
+            await pads.wait_closed()
+            (pad,) = _FakePad.created
+            assert not pad.closed and [x["wButtons"] for x in pad.applied] == [int(Button.B)]
+        finally:
+            finish.set()
+            pads.close()
+            await pads.wait_closed()
+
+    asyncio.run(run())
+
+
+def test_a_pad_of_one_boot_that_is_ready_after_its_controller_left_is_closed(tmp_path) -> None:
+    """An OJD feed belongs to one boot of its controller. One that is ready only after the
+    controller went away is closed, and the controller's next input gets a feed of its own."""
+
+    async def run() -> None:
+        delayed, started, finish = _slow_factory()
+        rx = _with_fake_pads(make_receiver(tmp_path), delayed, per_boot=True)
         pads = rx.gamepads
         try:
             pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
@@ -386,9 +429,91 @@ def test_release_during_creation_does_not_replay_old_input(tmp_path) -> None:
             assert _FakePad.created[1].applied[0]["wButtons"] == int(Button.B)
         finally:
             finish.set()
-            tasks = list(pads._creating.values())
             pads.close()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await pads.wait_closed()
+
+    asyncio.run(run())
+
+
+def test_a_controller_that_left_before_its_pad_was_started_gets_none(tmp_path) -> None:
+    """The report that asks for a pad and the controller's leaving can arrive in one turn of the
+    loop, before the creation has run a step. A pad of one boot must not be kept for it."""
+
+    async def run() -> None:
+        rx = _with_fake_pads(make_receiver(tmp_path), _FakePad, per_boot=True)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            pads.release("c0")  # same turn: the task has not started
+            await pads.wait_closed()
+            await pads.wait_closed()  # the close of what was built, if anything was
+            assert pads.status() == {} and all(pad.closed for pad in _FakePad.created)
+        finally:
+            pads.close()
+            await pads.wait_closed()
+
+    asyncio.run(run())
+
+
+def test_input_that_waits_behind_a_failed_creation_of_the_boot_before_gets_its_pad(tmp_path) -> None:
+    """A feed that could not start for a boot that is over says nothing about the next one: the
+    input waiting from the new boot starts a creation of its own."""
+    attempts: list[str] = []
+    started, finish = threading.Event(), threading.Event()
+
+    def fails_once(label: str) -> _FakePad:
+        attempts.append(label)
+        if len(attempts) == 1:
+            started.set()
+            assert finish.wait(3)
+            raise SetupError("the driver was not running")
+        return _FakePad(label)
+
+    async def run() -> None:
+        rx = _with_fake_pads(make_receiver(tmp_path), fails_once, per_boot=True)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            await wait_for(started.is_set)
+            pads.release("c0")
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.B)).as_event(None)})
+            finish.set()
+            await wait_for(lambda: _FakePad.created and _FakePad.created[0].applied)
+            assert attempts == ["c0", "c0"] and rx.log.counts.get("gamepad_failed", 0) == 0
+            assert [x["wButtons"] for x in _FakePad.created[0].applied] == [int(Button.B)]
+        finally:
+            finish.set()
+            pads.close()
+            await pads.wait_closed()
+
+    asyncio.run(run())
+
+
+def test_a_report_the_driver_refuses_costs_that_report_and_not_the_pad(tmp_path) -> None:
+    """ViGEm raises on any error code, a passing one included. The report is lost and says so
+    where it was raised; the pad stays for the next one, as the game expects."""
+
+    class RefusesOnce(_FakePad):
+        def apply(self, xinput: dict[str, int]) -> None:
+            if xinput["wButtons"] == int(Button.A):
+                raise RuntimeError("Error: VIGEM_ERROR_TARGET_NOT_PLUGGED_IN")
+            super().apply(xinput)
+
+    async def run() -> None:
+        rx = _with_fake_pads(make_receiver(tmp_path), RefusesOnce)
+        pads = rx.gamepads
+        try:
+            pads.on_event({"controller": "c0", **GamepadState().as_event(None)})
+            await wait_for(lambda: _FakePad.created and _FakePad.created[0].applied)
+            with pytest.raises(RuntimeError, match="NOT_PLUGGED_IN"):
+                pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.A)).as_event(None)})
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.B)).as_event(None)})
+            (pad,) = _FakePad.created
+            assert not pad.closed and pad.applied[-1]["wButtons"] == int(Button.B)
+            assert pads.status() == {"c0": {"slot": 0, "frames": 2, "rumbles": 0}}
+        finally:
+            pads.close()
+            await pads.wait_closed()
 
     asyncio.run(run())
 
@@ -413,5 +538,79 @@ def test_async_backend_error_is_visible_without_another_input_report(tmp_path) -
             assert pads.status() == {}
         finally:
             pads.close()
+
+    asyncio.run(run())
+
+
+def test_more_changes_than_are_kept_while_a_pad_is_created_end_in_the_newest_state(tmp_path) -> None:
+    """A ViGEm pad takes seconds to appear and a player does not wait for it: more button changes
+    than are kept in order must not cost the pad. The newest state stands for all of them."""
+
+    async def run() -> None:
+        started, finish = threading.Event(), threading.Event()
+
+        def delayed(label):
+            started.set()
+            assert finish.wait(3)
+            return _FakePad(label)
+
+        rx = _with_fake_pads(make_receiver(tmp_path), delayed)
+        pads = rx.gamepads
+        try:
+            for i in range(2 * PENDING_TRANSITIONS + 1):  # A hammered, and still down at the end
+                buttons = int(Button.A) if i % 2 == 0 else 0
+                pads.on_event({"controller": "c0", **GamepadState(buttons=buttons).as_event(None)})
+            pads.on_event({"controller": "c0", **GamepadState(buttons=int(Button.B)).as_event(None)})
+            await wait_for(started.is_set)
+            finish.set()
+            await wait_for(lambda: _FakePad.created and _FakePad.created[0].applied)
+            pad = _FakePad.created[0]
+            assert pad.applied[-1]["wButtons"] == int(Button.B)  # A was let go on the way
+            assert len(pad.applied) <= PENDING_TRANSITIONS
+            assert pads.status() == {"c0": {"slot": 0, "frames": len(pad.applied), "rumbles": 0}}
+            assert rx.log.counts.get("gamepad_failed", 0) == 0
+        finally:
+            finish.set()
+            pads.close()
+            await pads.wait_closed()
+
+    asyncio.run(run())
+
+
+def test_a_pad_whose_close_waits_is_closed_off_the_event_loop(tmp_path) -> None:
+    """Closing an OJD feed waits for its process to end. The event loop carries every controller's
+    traffic, so that wait belongs to a worker thread, and ``wait_closed`` is what joins it."""
+    let_go = threading.Event()
+    closed_in: list[threading.Thread] = []
+
+    class WaitingPad(_FakePad):
+        close_blocks = True
+
+        def close(self) -> None:
+            closed_in.append(threading.current_thread())
+            assert let_go.wait(3)
+            if self.label == "c1":
+                raise RuntimeError("the feed would not end")
+            super().close()
+
+    async def run() -> None:
+        rx = _with_fake_pads(make_receiver(tmp_path), WaitingPad, per_boot=True)
+        pads = rx.gamepads
+        try:
+            for label in ("c0", "c1"):
+                pads.on_event({"controller": label, **GamepadState().as_event(None)})
+            await wait_for(lambda: len(_FakePad.created) == 2 and all(p.applied for p in _FakePad.created))
+            first = next(p for p in _FakePad.created if p.label == "c0")
+            pads.release("c0")  # the controller went away: this returns while the close still waits
+            assert pads.status().keys() == {"c1"}
+            await wait_for(lambda: closed_in)  # the loop keeps turning, which is the point
+            assert not first.closed and closed_in[0] is not threading.main_thread()
+            pads.close()  # shutdown, with the first close still waiting and a second one to come
+            let_go.set()
+            await pads.wait_closed()
+            assert first.closed and len(closed_in) == 2
+            assert [r["controller"] for r in rx.log.records if r["event"] == "gamepad_close_failed"] == ["c1"]
+        finally:
+            let_go.set()
 
     asyncio.run(run())
