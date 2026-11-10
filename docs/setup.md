@@ -153,10 +153,9 @@ The run directory contains:
 
 `GET http://<receiver>/_status` returns the live state as JSON: per controller its session,
 battery level, headset and headset stream (`playback`), and with `--gamepad` every virtual pad
-under `gamepads`, with its XInput `slot` or an `error`. The macOS OJD backend also reports
-`kind` and `profile`, with `slot: null`; see the
-[macOS gamepad setup](../README.md#virtual-gamepad-macos-experimental). `-v` echoes the
-bulky log fields (request bodies, decoded protobufs) to the console too.
+under `gamepads`, with its XInput `slot` or the `error` it ended in; a macOS pad has no slot
+and names its `kind` and `profile`. `-v` echoes the bulky log fields (request bodies, decoded
+protobufs) to the console too.
 
 `/_audio` controls the headset stream while the receiver runs: `GET` shows it, and a `POST`
 names an action, `{"do": "start", "source": "system"}` (optionally with `volume` and
@@ -214,7 +213,7 @@ Events worth knowing when something does not work:
 | `audio_start_failed` | the `--audio-source` stream could not start (`spec` is the source, `error` says why): no ffmpeg with libopus on `PATH`, or the source was refused |
 | `audio_source_invalid` | the `--audio-source` spelling is wrong, or the capture it names cannot be set up on this machine (no loopback device, missing extra) |
 | `audio_capture`, `audio_capture_failed`, `audio_capture_ended` | the capture feeding ffmpeg (`system`, `device:`) started, could not start, or stopped (`error` says why); after a failure ffmpeg exits (`audio_ffmpeg_exited`) and both start again, until the stream is stopped |
-| `gamepad_created`, `gamepad_failed` | `--gamepad`: a pad backend started (`slot` is its XInput player, or null on macOS), or creation/runtime failed (`error`, also under `gamepads` in `/_status`); for OJD, started means the feed process was launched; the controller's next boot retries a failed pad |
+| `gamepad_created`, `gamepad_failed` | `--gamepad`: a controller's virtual pad exists (`slot` is its XInput player on Windows; on macOS the driver's feed was started), or could not be created or stopped working (`error`, shown under `gamepads` in `/_status` too); the controller's next boot tries again |
 | `gamepad_rumble_failed` | the game's rumble could not be forwarded (the game session was not up) |
 | `controller_hardware` | one line at READY with what the controller says about itself: product, hardware and firmware builds, serial, headset |
 | `controller_battery` | the battery gauge moved (`percent`); it steps down one percent at a time |

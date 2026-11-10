@@ -95,16 +95,19 @@ worker thread, forwards the motor levels a game sets to that controller's `GameS
 lets go of the pad's state when the controller reboots, which is also when a pad that could not
 be created is tried again.
 
-The macOS backend (`ojd_gamepad.py`) runs the signed OpenJoystickDriver app as `ojd virtual
-feed`, one subprocess per controller. Worker threads submit paced JSON frames and receive
-rumble feedback; an asynchronous failure callback reports a dead feed even without a new input
-event. A bounded queue keeps button/trigger transitions and coalesces stick-only updates. The
-backend converts XInput's Y-up sticks to OJD's Y-down coordinates and its 16-bit rumble feedback
-to the shared backend's byte levels. OJD owns the HID entitlement. The adapter repeats held
-input every 20 ms so the CLI exchanges feedback promptly even when the physical controls are
-still (its own idle cadence is 500 ms). Bounded rumble renewals have a 40 ms expiry allowance
-for exchange jitter; explicit stops stay immediate. On disconnect, its feed is closed;
-pending constructors are reaped on release/shutdown.
+The macOS pad (`ojd_gamepad.py`, `--gamepad ojd`) is a process: `ojd virtual feed`, the command
+line of the OpenJoystickDriver app, which holds the entitlement a virtual HID device needs. Each
+controller has one. Three threads keep its pipes off the event loop: one writes a JSON frame
+per line, at most every 10 ms, one reads the rumble commands the driver prints, and one keeps
+the last lines of its error output for the message when it ends. Reports queue in order; one
+that only moves a stick replaces the one waiting, and a button or trigger change never does.
+The driver hands rumble over when a frame arrives and otherwise every 500 ms, so the held state
+is written again every 20 ms: a game that renews a 100 ms effect would pulse without it. A
+rumble with a duration is stopped by a timer 40 ms past its end unless it was renewed. Sticks
+turn from XInput's Y-up to the driver's Y-down, and motor levels from 16 bits to the 8 the
+shared code takes. A feed that ends by itself says so through `on_error`, with no report needed
+to find out. `VirtualGamepads` closes a feed when its controller goes away, which frees one of
+the driver's four, and does it in a worker thread, since closing waits for the process.
 
 **`RtcEndpoint`** is one UDP socket and one peer. It demultiplexes datagrams (STUN / DTLS /
 RTP), runs the connectivity checks and keepalives, drives the DTLS handshake through pyOpenSSL

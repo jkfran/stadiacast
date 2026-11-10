@@ -32,8 +32,8 @@ vibrates on request and plays sound on its headset jack.
   run, wake the controller.
 - 🎮 **A PC gamepad on Windows.** Every controller becomes an Xbox 360 controller for your
   games, and the game's rumble reaches the controller.
-- 🍎 **macOS gamepad output.** An experimental OpenJoystickDriver bridge exposes each
-  controller to Mac games, with selectable SDL and Apple GameController profiles.
+- 🍎 **A gamepad on macOS.** Through the OpenJoystickDriver app every controller becomes an Xbox
+  controller for Mac games, rumble included.
 - 🎧 **Headset audio.** What the PC plays, or any file, streams to a headset plugged into the
   controller.
 - 👥 **Several controllers at once**, each one its own player.
@@ -60,9 +60,9 @@ stadiacast --preset live --dns-upstream 192.168.1.1   # your router: the DNS sin
    stadiacast-provision provision --address <ADDR> --ssid <your SSID>
    ```
 
-3. **Start the receiver** with the command above; on Windows add `--gamepad vigem` for the
-   [virtual gamepad](#virtual-gamepad-windows), or on macOS use
-   [`--gamepad ojd`](#virtual-gamepad-macos-experimental). From a source checkout,
+3. **Start the receiver** with the command above; for a virtual gamepad add `--gamepad vigem`
+   on [Windows](#virtual-gamepad-windows) or `--gamepad ojd` on
+   [macOS](#virtual-gamepad-macos). From a source checkout,
    `tools/start_receiver.sh` does the same in the background, with the settings of a `.env`
    file (see `.env.example`).
 4. **Wake the controller** with a ~1 s press of the Stadia button, released at the first
@@ -211,60 +211,44 @@ and Capture have no XInput equivalent. The game's rumble comes back to the contr
 the game session, which `--gamepad` starts for that reason. Two controllers are players 1 and
 2, and `/_status` lists the pads under `gamepads`.
 
-## Virtual gamepad (macOS, experimental)
+## Virtual gamepad (macOS)
 
-`--gamepad ojd` feeds each controller to the signed **OpenJoystickDriver** app through its
-`virtual feed` interface. Install
-[OpenJoystickDriver 0.6.0-alpha.1](https://github.com/xsyetopz/OpenJoystickDriver/releases/tag/0.6.0-alpha.1),
-the MIT-licensed release, into `/Applications`, and open it. It supports Apple silicon and Intel
-on macOS 12 or later. Allow **OpenJoystickDriver** in System Settings → Privacy & Security →
-**Input Monitoring**, and grant **Accessibility** if the app requests it. Keep the app running.
-Later OJD releases use a different license; the version linked here is the tested protocol target.
+`--gamepad ojd` turns each controller into an Xbox controller for the games on a Mac, through
+[OpenJoystickDriver](https://github.com/xsyetopz/OpenJoystickDriver), an app that publishes
+virtual gamepads on macOS 12 and later:
 
 ```sh
-uv run stadiacast --preset live --dns-upstream "$ROUTER" --advertise-ip "$MAC_IP" \
-  --gamepad ojd --gamepad-profile game-controller-compatible
+stadiacast --preset live --dns-upstream 192.168.1.1 --gamepad ojd
 ```
 
-Stadiacast finds `ojd` on `PATH` or the app in `/Applications` or `~/Applications`; installing
-OJD's command-line symlink is optional. `--ojd-path PATH` selects another executable.
+It needs one extra install, once: put
+[OpenJoystickDriver 0.6.0-alpha.1](https://github.com/xsyetopz/OpenJoystickDriver/releases/tag/0.6.0-alpha.1)
+into Applications, open it, and allow it under System Settings → Privacy & Security →
+Accessibility, and under Input Monitoring when macOS lists it there. That release is the one
+this output is written for, and the last one under the MIT license; later ones are for
+noncommercial use only. The driver is alpha software and this output is new, so expect rough
+edges.
 
-Choose the profile for the application, then restart the receiver and wake the controller:
+The app has to be running. The receiver finds it in Applications, or its `ojd` command on
+`PATH`, or the executable `--ojd-path` names. A pad that cannot start, or stops, shows the
+driver's own message under `gamepads` in `/_status` and in a `gamepad_failed` record of the
+log; the controller's next boot tries again.
 
-| `--gamepad-profile` | initial target |
+`--gamepad-profile` chooses what the pad says it is:
+
+| profile | the pad |
 |---|---|
-| `game-controller-compatible` (default) | Apple's GameController framework and compatible SDL games; Xbox Wireless Controller identity |
-| `sdl-compatible` | alternative for Steam and SDL-based emulators; Xbox Adaptive Controller identity |
-| `generic` | applications with configurable raw-HID bindings |
+| `game-controller-compatible`, the default | an Xbox Wireless Controller. Apple's GameController framework, Chrome and SDL2 take its input, and Chrome and SDL2 send it rumble |
+| `sdl-compatible` | an Xbox Adaptive Controller |
+| `generic` | a plain HID gamepad without rumble, for a program with bindings of its own |
 
-Check the layout in the actual game or browser: recognition and mappings differ between input
-APIs, including in CrossOver. OJD is alpha software. On macOS 15.8.2 arm64, synthetic input
-worked through system HID, Apple's GameController framework, Chrome's standard Gamepad API,
-and Moonlight's bundled SDL2. The default profile also returned SDL2 rumble. The SDL-compatible
-profile enumerated but delivered no input through that SDL2 build; the generic profile worked with an explicit SDL
-mapping but did not provide rumble. These probes do not establish compatibility with every game.
+Try the other two when a game does not take the default.
 
-For an SDL application that needs an explicit mapping, install OJD's CLI from its Settings,
-then obtain the selected profile's mapping with `ojd virtual export-mapping generic` (or the
-profile you chose) and pass it to the application's `SDL_GAMECONTROLLERCONFIG` environment.
-
-Buttons, D-pad, both sticks and separate analog triggers are forwarded. Stadia becomes Guide;
-Assistant and Capture are omitted by the shared XInput mapping. `--gamepad-deadzone off` sends
-raw sticks. Rumble comes back through the game session, which `--gamepad` starts automatically.
-
-Each controller owns one feed (OJD allows four CLI feeds). The feed closes on disconnect and is
-created again on the next boot/input. Pipe I/O runs off the receiver's event loop; stick-only
-updates are coalesced during bursts, while button and trigger transitions retain their order.
-OJD holds every frame for at least 8 ms; Stadiacast paces submissions at up to 100 Hz.
-When the controls are still, their held state is repeated every 20 ms to keep rumble feedback
-flowing: OJD's 500 ms idle feedback cadence otherwise batches Chrome's 100 ms effect renewals
-into short pulses. Bounded effects allow 40 ms of renewal jitter; explicit stop commands stop
-immediately.
-
-`/_status` includes each pad's `kind`, `profile`, submitted `frames`, `rumbles`, and any `error`;
-`slot` is `null` on macOS. A `gamepad_created` record means the feed process started; an OJD
-permission or service failure produces `gamepad_failed`, even if no more input arrives. After
-fixing the reported issue, reboot the controller to retry.
+Buttons, sticks and triggers map as on Windows, with the same deadzones (`--gamepad-deadzone
+off` for raw sticks). The Stadia button is the guide button, and what macOS does on it is set
+in System Settings → Game Controllers. The game's rumble comes back to the controller through
+the game session, which `--gamepad` starts for that reason. Every controller is a pad of its
+own, up to the four the driver allows, and `/_status` lists them under `gamepads`.
 
 ## Development
 
@@ -281,8 +265,8 @@ against a receiver in lab mode, and how to test against a real controller safely
 
 1. **First-boot autoconnect:** detect a controller in BLE setup mode and provision it onto the
    network automatically (today `stadiacast-provision` is the manual version).
-2. **Virtual gamepad on Linux:** Windows has ViGEm and macOS has the experimental OJD bridge;
-   Linux (uinput) is open. Broader macOS game compatibility testing is welcome.
+2. **Virtual gamepad on Linux:** Windows (`--gamepad vigem`) and macOS (`--gamepad ojd`) have
+   one; Linux (uinput) is open.
 
 ## Security and privacy
 

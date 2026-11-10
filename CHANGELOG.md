@@ -11,10 +11,10 @@ that lets go of a controller that was switched off, and limits on what one reque
 device on the network can cost it.
 
 ### Added
-- Experimental macOS virtual gamepads through `--gamepad ojd`, using the signed
-  OpenJoystickDriver 0.6.0-alpha.1 app. `--gamepad-profile` selects SDL, Apple GameController or
-  generic HID output; `--ojd-path` overrides executable discovery. Each controller gets a feed
-  with buttons, sticks, triggers and rumble feedback, plus runtime errors in `/_status`.
+- A virtual gamepad on macOS: `--gamepad ojd` turns each controller into an Xbox controller for
+  Mac games through the OpenJoystickDriver app (0.6.0-alpha.1), and the game's rumble comes back
+  to the controller. `--gamepad-profile` chooses what the pad says it is and `--ojd-path` names
+  the driver's executable. The driver is alpha software and this output is new.
 - `stadiacast-provision provision` ends with the outcome: `Done` once the controller reported
   that it joined or dropped the Bluetooth link (which it does on leaving setup mode), and an
   error that says what to check when it reported a failure or gave no sign of joining.
@@ -55,12 +55,6 @@ device on the network can cost it.
 - The setup guide tied the boot that never connects after provisioning to controllers that were
   never linked. Every controller does it, and the guide now says to turn the controller off and
   wake it instead of waiting for it to switch itself off.
-- OJD feedback is exchanged every 20 ms while controls are idle, avoiding 500 ms batches of
-  Chrome's 100 ms rumble renewals that made sustained vibration pulse. Bounded effects allow
-  40 ms of renewal jitter; explicit stop commands remain immediate.
-- Virtual-pad creation retains brief button/trigger transitions, and a pad whose constructor
-  finishes after disconnect or shutdown is closed rather than left behind. Backend failures
-  during input delivery are reported without interrupting the receiver.
 - `stadiacast-provision` failed on Linux at every provisioning, refusing the credentials as too
   large for a Bluetooth packet size that BlueZ does not report.
 - With `--wifi-scan`, `stadiacast-provision` reads the controller's public key before it starts
