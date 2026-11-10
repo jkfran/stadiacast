@@ -264,9 +264,10 @@ The alert is what makes the failure fast. After it the firmware's HTTP client se
 request within a fraction of a second. When the connection is closed on the ClientHello with no
 alert, the client sends nothing for 12 to 15 s, wherever in the boot the upload falls: first,
 before `FirmwareVersionCheck`, or later, between DTLS and `ResolveDiscovery`. Measured on one
-controller from its first packet to READY, a wake took 19 s with the bare close and 4.3 s with
-the alert, which was 7.4 s after the controller got its address. The retries show the same
-wait: one every 60 s after an alert, one every 75 s after a bare close.
+controller from its first packet to READY, a wake took 19 s with the bare close and 4.0 to
+4.4 s with the alert, which was 7 to 10 s after the controller got its address. The retries
+show the same wait: one every 60 s after an alert, one every 75 s after a bare close. The boot
+after provisioning (§11) runs the same course with either, the waits apart.
 
 ## 8. Time
 
@@ -371,16 +372,17 @@ copied from its results can be written. `stadiacast-provision` therefore leaves 
 unless `--wifi-scan` asks for it, and reads the key before the scan when it does.
 
 **The boot after provisioning.** With the credentials the controller joins and runs its network
-check: `generate_204`, `stadiaconfig`, the Omaha update check, a Clearcut upload. About half a
-minute later it joins again and a boot like any other begins: Clearcut,
-`FirmwareVersionCheck`, `RegisterController` with the resumed discovery and the offer. This one
-boot then leaves the usual path, whether or not the controller was ever linked. It resolves the
-GMsg name but never polls it, and half a second after the first registration it registers
-again without a `discovery` (`device_id`, a new `attempt_id`, `client_flag`). The answer to its
-offer is never fetched. The light blinks white, and button presses make the controller rumble
-and send nothing. Left alone it sends `ResolveDiscovery` 300 s after the registration and an
-Omaha check 75 s later, then sleeps. Its next boot, after that or after it was turned off by
-hand, is an ordinary autolinking boot and connects; no link code is involved.
+check: `generate_204`, `stadiaconfig`, the Omaha update check, a Clearcut upload. Some 13 s
+later (half a minute when that upload is closed without an alert, §7) it joins again and a boot
+like any other begins: Clearcut, `FirmwareVersionCheck`, `RegisterController` with the resumed
+discovery and the offer. This one boot then leaves the usual path, whether or not the
+controller was ever linked. It resolves the GMsg name but never polls it, and half a second
+after the first registration it registers again without a `discovery` (`device_id`, a new
+`attempt_id`, `client_flag`). The answer to its offer is never fetched. The light blinks white,
+and button presses make the controller rumble and send nothing. Left alone it sends
+`ResolveDiscovery` 300 s after the registration and an Omaha check about a minute later, then
+sleeps. Its next boot, after that or after it was turned off by hand, is an ordinary
+autolinking boot and connects; no link code is involved.
 
 That second registration has to be answered without the `display` oneof. In one live run with
 the oneof in that response the controller polled GMsg at once and took the answer to the first
