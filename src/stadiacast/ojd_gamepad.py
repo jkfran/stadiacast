@@ -23,7 +23,10 @@ from typing import Any
 from stadiacast.errors import SetupError
 from stadiacast.gamepad import GamepadState
 
-PROFILES = ("sdl-compatible", "game-controller-compatible", "generic")
+#: What ``ojd virtual feed --as`` takes. The default is the one Apple's GameController framework,
+#: Chrome and SDL2 take input from.
+PROFILES = ("game-controller-compatible", "sdl-compatible", "generic")
+DEFAULT_PROFILE = PROFILES[0]
 RELEASE_URL = "https://github.com/xsyetopz/OpenJoystickDriver/releases/tag/0.6.0-alpha.1"
 MAX_PENDING = 32
 # OJD plays each frame for at least 8 ms. Pace writes to avoid building a stale
@@ -98,6 +101,7 @@ class OJDPad:
     """One virtual feed; ``apply`` is nonblocking, ``close`` reaps its subprocess."""
 
     slot: int | None = None  # macOS has no XInput player slot
+    close_blocks = True  # close() sees the feed process out: not for the event loop's thread
 
     def __init__(self, label: str, executable: str, profile: str) -> None:
         if profile not in PROFILES:
@@ -221,8 +225,9 @@ class OJDPad:
             try:
                 self._feedback(json.loads(line))
             except (ValueError, TypeError, KeyError) as e:
-                self._fail(f"invalid OJD rumble feedback: {e}")
-                return
+                # A line this code cannot read costs one rumble command, not the pad.
+                with self._condition:
+                    self._diagnostics.append(f"feedback not understood ({e})")
         code = self._process.wait()
         self._threads[0].join(timeout=0.2)  # capture stderr before reporting an exit
         with self._condition:
@@ -316,6 +321,10 @@ class OJDPad:
                 self._process.wait()
         for thread in self._threads:
             thread.join(timeout=0.5)
-        for stream in (self._process.stdout, self._process.stderr):
-            if stream is not None:
+        # A reader that is still blocked (something else holds the feed's pipe open) holds its
+        # stream's lock, and closing the stream would wait for that lock without limit. It ends
+        # with whatever holds the pipe.
+        stderr_reader, feedback_reader = self._threads[0], self._threads[1]
+        for stream, reader in ((self._process.stdout, feedback_reader), (self._process.stderr, stderr_reader)):
+            if stream is not None and not reader.is_alive():
                 stream.close()

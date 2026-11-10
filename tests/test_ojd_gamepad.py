@@ -110,7 +110,14 @@ def reports(path):
 def publish_feedback(path, message):
     temporary = path.with_suffix(".next")
     temporary.write_text(json.dumps(message))
-    temporary.replace(path.with_suffix(".feedback"))
+    for attempt in range(50):
+        try:
+            temporary.replace(path.with_suffix(".feedback"))
+            return
+        except PermissionError:  # Windows, while the peer has the file open to read it
+            if attempt == 49:
+                raise
+            time.sleep(0.002)
 
 
 @pytest.mark.parametrize(
@@ -299,3 +306,47 @@ def test_flags_discovery_and_platform_error(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "is_file", lambda _: False)
     with pytest.raises(SetupError, match="signed app"):
         find_ojd()
+
+
+def test_feedback_that_cannot_be_read_costs_a_rumble_and_not_the_pad(feed):
+    pad, path = feed()
+    errors = []
+    pad.on_error(errors.append)
+    rumbles = []
+    pad.on_rumble(lambda left, right: rumbles.append((left, right)))
+    for line in ("not json", "[1, 2]", json.dumps({"type": "SetRumble", "intensities": {"lowFrequency": 70000}})):
+        path.with_suffix(".feedback").write_text(line)
+        time.sleep(0.05)
+    publish_feedback(path, {"type": "SetRumble", "intensities": {"lowFrequency": 65535}})
+    eventually(lambda: rumbles == [(255, 0)])
+    pad.apply(GamepadState(buttons=int(Button.A)).to_xinput())  # the pad still takes input
+    eventually(lambda: reports(path)[-1]["buttons"] == ["South"])
+    assert errors == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a child that inherits the feed's pipes, the POSIX way")
+def test_close_does_not_wait_for_whatever_else_holds_the_feeds_pipes(tmp_path, monkeypatch):
+    """Something the driver's command started may keep its output pipes open after it has gone.
+    Closing the pad then leaves the two readers to end with it, and returns."""
+    script = tmp_path / "feed.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])  # inherits stdout and stderr\n"
+        "for line in sys.stdin:\n"
+        "    pass\n"
+    )
+    import stadiacast.ojd_gamepad as module
+
+    real_popen = module.subprocess.Popen
+
+    def popen(_command, **kw):
+        kw.pop("executable")
+        return real_popen([sys.executable, str(script)], **kw)
+
+    monkeypatch.setattr(module.subprocess, "Popen", popen)
+    pad = OJDPad("c0", "/signed/app", "generic")
+    time.sleep(0.3)
+    started = time.monotonic()
+    pad.close()
+    assert time.monotonic() - started < 2.5
+    assert pad._process.poll() == 0

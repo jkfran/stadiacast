@@ -15,6 +15,7 @@ from stadiacast.config import AUDIO_APPLICATIONS, PRESETS, Config
 from stadiacast.errors import SetupError
 from stadiacast.game_session import GAME_FRAMINGS, GAME_KEY_MAX, HAPTICS_WATCHDOG_S
 from stadiacast.helpers import HELPER_FLAG, run_helper
+from stadiacast.ojd_gamepad import DEFAULT_PROFILE, PROFILES
 from stadiacast.receiver import Receiver
 from stadiacast.rtc import WIRE_ID_DC_RPC_DISPLAY, wire_id_valid
 
@@ -292,12 +293,15 @@ def build_parser(preset: str | None = None) -> argparse.ArgumentParser:
     )
     g.add_argument(
         "--gamepad-profile",
-        choices=("sdl-compatible", "game-controller-compatible", "generic"),
-        default="game-controller-compatible",
-        help="OJD virtual controller identity (default: game-controller-compatible for Apple's controller framework)",
+        choices=PROFILES,
+        default=DEFAULT_PROFILE,
+        help="ojd: what the pad says it is (the default is an Xbox Wireless Controller, which Apple's "
+        "GameController framework, browsers and SDL2 take)",
     )
     g.add_argument(
-        "--ojd-path", default="", help="OJD executable (default: find ojd on PATH or the installed macOS app)"
+        "--ojd-path",
+        default="",
+        help="ojd: the driver's executable (default: ojd on PATH, or the OpenJoystickDriver app in Applications)",
     )
 
     g = ap.add_argument_group("display link")
