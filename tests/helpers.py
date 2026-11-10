@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import ssl
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,21 @@ from tests.fake_controller import FakeController
 
 def no_log(*_args: Any, **_kwargs: Any) -> None:
     """A log sink for fake controllers that drops everything."""
+
+
+def client_hello(name: str | None, tls13: bool = False) -> bytes:
+    """The first bytes a TLS client sends when it asks for ``name``: a ClientHello as the ssl
+    module writes it, of TLS 1.2 like the controller's unless ``tls13``."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    if not tls13:
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    outgoing = ssl.MemoryBIO()
+    tls = ctx.wrap_bio(ssl.MemoryBIO(), outgoing, server_hostname=name)
+    with contextlib.suppress(ssl.SSLWantReadError):
+        tls.do_handshake()
+    return outgoing.read()
 
 
 def make_receiver(tmp_path: Path, **overrides: Any) -> Receiver:

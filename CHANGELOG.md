@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A wake took about 15 s longer than it had to. The receiver refuses the controller's analytics
+  upload, and it did so by closing the connection, after which the firmware waits 12 to 15 s
+  before its next request. `--clearcut-block tls` (the `live` preset) now answers that upload's
+  ClientHello with the TLS alert it was meant to get, and the controller goes on at once: from
+  its first packet to ready, about 4 s where it took 19. The upload's retries, one a minute
+  while a controller is on, no longer hold up the controller's other requests either.
+
 ## [1.1.0] - 2026-11-10
 
 A virtual gamepad on macOS, provisioning that says how it ended and works without the

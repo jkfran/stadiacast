@@ -254,16 +254,19 @@ Every wake uploads analytics to `play.googleapis.com/log/batch` around 6 to 9 s 
 every logged session the upload was followed by radio silence within about 0.3 s: the
 controller powers off before discovery completes. When the upload *fails fast*, the batcher
 requeues it 60 s later and the boot continues. The `live` preset therefore uses
-`--clearcut-block tls`: the TLS handshake for SNI `play.googleapis.com` is failed within
-milliseconds of the ClientHello. (`--clearcut-block dns` answers NXDOMAIN instead, but the
-firmware then falls back to `8.8.8.8` and reaches the real host.) The receiver also closes the
-Clearcut connection after the `LogResponse`, because a kept-alive connection there blocked
-the serial HTTP client from sending `ResolveDiscovery`.
+`--clearcut-block tls`: a ClientHello for SNI `play.googleapis.com` is answered within
+milliseconds with a fatal `handshake_failure` alert and the close. (`--clearcut-block dns`
+answers NXDOMAIN instead, but the firmware then falls back to `8.8.8.8` and reaches the real
+host.) The receiver also closes the Clearcut connection after the `LogResponse`, because a
+kept-alive connection there blocked the serial HTTP client from sending `ResolveDiscovery`.
 
-After a refused upload the firmware's HTTP client sends nothing for 12 to 15 s. On a wake that
-pause comes first, before `FirmwareVersionCheck`, and is most of the time a boot takes. When
-the upload comes later, as on a wake a few seconds after a power-off, the pause has fallen
-between DTLS and `ResolveDiscovery`, and READY came that much after the link.
+The alert is what makes the failure fast. After it the firmware's HTTP client sends its next
+request within a fraction of a second. When the connection is closed on the ClientHello with no
+alert, the client sends nothing for 12 to 15 s, wherever in the boot the upload falls: first,
+before `FirmwareVersionCheck`, or later, between DTLS and `ResolveDiscovery`. Measured on one
+controller from its first packet to READY, a wake took 19 s with the bare close and 4.3 s with
+the alert, which was 7.4 s after the controller got its address. The retries show the same
+wait: one every 60 s after an alert, one every 75 s after a bare close.
 
 ## 8. Time
 
@@ -409,7 +412,8 @@ is never sent.
   its own SSRC, heard in the jack on a real controller.
 - The battery gauge (#10) and the headset notification (#4) of §5, both seen live, and the
   hardware fields of `GetControllerStateResponse`.
-- Omaha and Clearcut message formats.
+- Omaha and Clearcut message formats, and the two ways a refused Clearcut handshake ends for
+  the firmware (§7): at once after a TLS alert, after about 15 s without one.
 - The Bluetooth setup service of §11: the windowed reads, the key, the credentials and the
   states, on networks with WPA2-PSK and CCMP.
 - The boot after provisioning of §11, on a controller that was linked before and on one that

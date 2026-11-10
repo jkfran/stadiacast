@@ -13,8 +13,17 @@ import pytest
 from stadiacast import http_server
 from stadiacast.certs import create_self_signed
 from stadiacast.config import Config
-from stadiacast.http_server import MAX_BODY_BYTES, MAX_HEAD_BYTES, HttpRequest, HttpResponse, HttpServer
+from stadiacast.http_server import (
+    MAX_BODY_BYTES,
+    MAX_HEAD_BYTES,
+    MAX_TLS_RECORD_BYTES,
+    HttpRequest,
+    HttpResponse,
+    HttpServer,
+    client_hello_sni,
+)
 from stadiacast.log import EventLog
+from tests.helpers import client_hello
 
 
 async def _serve(tmp_path, handler, **cfg_overrides):
@@ -362,3 +371,27 @@ def test_a_busy_control_port_is_skipped_and_logged(tmp_path):
             blocker.close()
 
     asyncio.run(run())
+
+
+def test_the_server_name_is_read_from_a_client_hello():
+    for tls13 in (False, True):
+        hello = client_hello("Play.GoogleAPIs.com", tls13=tls13)
+        assert client_hello_sni(hello) == "play.googleapis.com"
+        assert client_hello_sni(hello + b"\x17\x03\x03\x00\x01x") == "play.googleapis.com"  # what follows is not read
+        assert client_hello_sni(client_hello(None, tls13=tls13)) is None  # a hello that names no server
+        for cut in range(len(hello)):  # a record that is not all there names one or none, and never raises
+            assert client_hello_sni(hello[:cut]) in (None, "play.googleapis.com")
+    for junk in (b"", b"\x16", b"GET / HTTP/1.1\r\n\r\n", bytes(64), b"\x16\x03\x01\xff\xff\x01" + bytes(300)):
+        assert client_hello_sni(junk) is None
+    server_hello = b"\x16\x03\x03\x00\x2a\x02" + bytes(41)
+    assert client_hello_sni(server_hello) is None  # a handshake record, but not a ClientHello
+
+
+def test_a_hello_is_waited_for_until_its_record_is_whole():
+    hello = client_hello("play.googleapis.com")
+    arrived = http_server._hello_arrived
+    assert [arrived(hello[:n]) for n in (0, 1, 4, 5, len(hello) - 1)] == [False] * 5
+    assert arrived(hello) and arrived(hello + b"more")
+    assert arrived(b"GET / HTTP/1.1")  # not TLS: nothing more to wait for
+    oversized = b"\x16\x03\x03" + (MAX_TLS_RECORD_BYTES).to_bytes(2, "big")
+    assert arrived(oversized)  # a record longer than TLS allows is not waited for either

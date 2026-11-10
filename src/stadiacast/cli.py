@@ -160,9 +160,9 @@ def build_parser(preset: str | None = None) -> argparse.ArgumentParser:
         "--clearcut-block",
         choices=("off", "tls", "dns"),
         default="off",
-        help="tls: abort the TLS handshake when the SNI is the Clearcut host, so the controller's first "
-        "analytics upload fails at once; dns: the DNS sink answers NXDOMAIN (leaks: the firmware falls "
-        "back to 8.8.8.8 and reaches the real host)",
+        help="tls: answer a ClientHello that names the Clearcut host with a fatal TLS alert, so the "
+        "controller's first analytics upload fails at once; dns: the DNS sink answers NXDOMAIN (leaks: "
+        "the firmware falls back to 8.8.8.8 and reaches the real host)",
     )
     g.add_argument(
         "--clearcut-keepalive",

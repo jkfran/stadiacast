@@ -30,7 +30,7 @@ controller in Bluetooth setup mode its Wi-Fi credentials, and `stadiacast-show-i
 
 ```
 Receiver                                   one per process (receiver.py)
- ├── HttpServer                            HTTPS :443 + HTTP :80/:8008, SNI callback (http_server.py)
+ ├── HttpServer                            HTTPS :443 + HTTP :80/:8008, reads each ClientHello (http_server.py)
  ├── TLS credential                        built-in, your own or a lab pair; the clock pin (certs.py)
  ├── Protos                                the protobuf schemas, loaded once (protos.py)
  ├── EventLog                              server.jsonl + console echo (log.py)
@@ -58,6 +58,12 @@ DNS sink does not do) and hands everything that identifies a controller to that 
 session. It is also the registry: `controller_for()` finds or creates the session for a request.
 Its own address towards the controller and the `stadiaconfig` fetch come from `netutil.py`,
 which the helpers share for the message on a port that is taken.
+
+**`HttpServer`** frames HTTP/1.1 and owns the listeners. The HTTPS one accepts its connections
+itself (`HelloServer`) and reads the server name in each ClientHello before the TLS layer does:
+a ClientHello for the Clearcut host is answered with a TLS alert and closed (protocol.md §7),
+and every other connection is handed to asyncio's TLS with nothing read from it. asyncio's own
+TLS listener cannot do that, since it closes a refused handshake without sending the alert.
 
 **`ControllerSession`** is one controller as the receiver sees it: the discovery RPCs
 (`register`, `discover`), the GMsg queue and long poll (`queue_gmsg`, `gmsg_poll`), the

@@ -3,8 +3,9 @@
 The firmware speaks HTTP/1.1 over TLS with ``Host: name:443``, protobuf bodies, keep-alive
 connections and occasionally chunked uploads.  Every request is handed to one async handler
 (the receiver's router) and logged by it; this module only does framing.  It also owns the TLS
-context: the SNI callback records the requested name per connection and, with
-``--clearcut-block tls``, fails the handshake for the Clearcut host.
+context, where the SNI callback records the requested name per connection, and the HTTPS
+listener, which reads each ClientHello before the TLS layer does: with ``--clearcut-block tls``
+the one for the Clearcut host is answered with a TLS alert (see ``HelloServer``).
 
 Every listener is open to the whole network, so nothing a client does may hold the server: a
 request has ``idle_timeout`` seconds for its head and as long again for its body, a response as
@@ -18,10 +19,11 @@ import contextlib
 import email.utils
 import http
 import re
+import socket
 import ssl
 import time
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -50,6 +52,10 @@ MAX_BODY_BYTES = 4 * 1024 * 1024
 #: Connections served at once; a controller holds one or two.  Further ones are closed on
 #: arrival, which keeps a flood of them from using up the process's file descriptors.
 MAX_CONNECTIONS = 128
+#: The TLS record a refused ClientHello is answered with: a fatal handshake_failure alert.
+HANDSHAKE_FAILURE_ALERT = bytes((21, 3, 3, 0, 2, 2, 40))
+#: The longest TLS record: 5 bytes of header and 2^14 of content.
+MAX_TLS_RECORD_BYTES = 5 + 16384
 #: The alerts a TLS client sends when it does not accept the server's certificate.
 CERTIFICATE_ALERTS = frozenset(
     {
@@ -61,6 +67,138 @@ CERTIFICATE_ALERTS = frozenset(
         "UNKNOWN_CA",
     }
 )
+
+
+def client_hello_sni(data: bytes) -> str | None:
+    """The server name a TLS ClientHello asks for, lower-cased, read from the first record of a
+    connection; None when ``data`` is not a ClientHello or names no server."""
+    try:
+        if data[0] != 22 or data[5] != 1:  # a handshake record that starts with a ClientHello
+            return None
+        hello = data[9 : 5 + int.from_bytes(data[3:5], "big")]  # past the record and handshake headers
+        i = 2 + 32  # client_version, random
+        i += 1 + hello[i]  # session_id
+        i += 2 + int.from_bytes(hello[i : i + 2], "big")  # cipher_suites
+        i += 1 + hello[i]  # compression_methods
+        end = min(len(hello), i + 2 + int.from_bytes(hello[i : i + 2], "big"))
+        i += 2
+        while i + 4 <= end:
+            kind = int.from_bytes(hello[i : i + 2], "big")
+            body = hello[i + 4 : i + 4 + int.from_bytes(hello[i + 2 : i + 4], "big")]
+            if kind == 0:  # server_name: a list length, then one entry of type 0 (host name) and its length
+                name = body[5 : 5 + int.from_bytes(body[3:5], "big")]
+                if len(body) < 5 or body[2] != 0 or len(name) != int.from_bytes(body[3:5], "big"):
+                    return None
+                return name.decode("ascii").lower() or None
+            i += 4 + len(body)
+    except (IndexError, UnicodeDecodeError):
+        pass
+    return None
+
+
+def _hello_arrived(data: bytes) -> bool:
+    """Whether ``data``, the start of a connection, holds all there is to look at: a whole first
+    TLS record, or bytes that are not one."""
+    if not data:
+        return False
+    if data[0] != 22:
+        return True
+    if len(data) < 5:
+        return False
+    whole = 5 + int.from_bytes(data[3:5], "big")
+    return whole > MAX_TLS_RECORD_BYTES or len(data) >= whole
+
+
+async def _peek_hello(conn: socket.socket) -> bytes:
+    """What a new connection sends first, left in the socket's buffer for whoever reads it next.
+
+    Polls: no event loop offers a wait for readable data that leaves the data alone on every
+    platform, and a ClientHello follows its connection within milliseconds.
+    """
+    delay = 0.001
+    while True:
+        try:
+            data = conn.recv(MAX_TLS_RECORD_BYTES, socket.MSG_PEEK)
+        except (BlockingIOError, InterruptedError):
+            data = None
+        if data is not None:
+            if not data:
+                raise ConnectionResetError("closed before a ClientHello")
+            if _hello_arrived(data):
+                return data
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 0.05)
+
+
+def _listening_sockets(host: str, port: int) -> list[socket.socket]:
+    """Listening sockets for ``host``, set up the way ``asyncio.start_server`` sets up its own."""
+    socks: list[socket.socket] = []
+    try:
+        infos = socket.getaddrinfo(host or None, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+        for family, kind, proto, _, address in dict.fromkeys(infos):
+            sock = socket.socket(family, kind, proto)
+            socks.append(sock)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind(address)
+            sock.listen(100)
+            sock.setblocking(False)
+    except OSError:
+        for sock in socks:
+            sock.close()
+        raise
+    return socks
+
+
+class HelloServer:
+    """A listener that hands each connection to ``greet`` as a bare socket, its first bytes unread.
+
+    asyncio's own TLS listener closes a handshake that its SNI callback refuses without sending
+    the alert the callback asked for, so the peer sees a connection that just ends, and the
+    controller's firmware waits about 15 s after one that ends so.  The HTTPS listener therefore
+    accepts its connections itself and decides what a ClientHello gets before the TLS layer has
+    read anything.  It stands in for an ``asyncio.Server``.
+    """
+
+    def __init__(
+        self,
+        sockets: list[socket.socket],
+        greet: Callable[[socket.socket], Coroutine[Any, Any, None]],
+        log: EventLog,
+    ) -> None:
+        self.sockets = sockets
+        self._greet = greet
+        self._log = log
+        self._greeting: set[asyncio.Task[None]] = set()
+        self._accepting = [asyncio.create_task(self._accept(sock)) for sock in sockets]
+
+    async def _accept(self, listener: socket.socket) -> None:
+        loop = asyncio.get_running_loop()
+        try:
+            while True:
+                try:
+                    conn, _ = await loop.sock_accept(listener)
+                except OSError as e:  # out of file descriptors, say: wait as asyncio's servers do
+                    self._log("tcp_accept_failed", error=str(e))
+                    await asyncio.sleep(1)
+                    continue
+                if len(self._greeting) >= MAX_CONNECTIONS:
+                    conn.close()
+                    continue
+                conn.setblocking(False)
+                task = loop.create_task(self._greet(conn))
+                self._greeting.add(task)
+                task.add_done_callback(self._greeting.discard)
+        finally:
+            listener.close()  # once the loop no longer waits on it
+
+    def close(self) -> None:
+        for task in (*self._accepting, *self._greeting):
+            task.cancel()
+
+    async def wait_closed(self) -> None:
+        await asyncio.gather(*self._accepting, *self._greeting, return_exceptions=True)
 
 
 def reason_phrase(status: int) -> str:
@@ -131,7 +269,7 @@ class HttpServer:
         self.log = log
         self.handler = handler
         self.clock = clock  # wall time for the Date header (the receiver may pin it)
-        self.servers: list[asyncio.Server] = []
+        self.servers: list[asyncio.Server | HelloServer] = []
         self.https_port: int | None = None
         self.http_ports: list[int] = []
         self._conn_seq = 0
@@ -174,11 +312,53 @@ class HttpServer:
             pass
         self.log("tls_client_hello", sni=name)
         if self.cfg.clearcut_block == "tls" and (name or "").lower() in CLEARCUT_HOSTS:
-            # Fail the controller's Clearcut upload within milliseconds of its ClientHello.  (The dns
-            # mode is not enough: on NXDOMAIN the firmware falls back to 8.8.8.8 and reaches the real host.)
-            self.log("tls_refused", sni=name, reason="clearcut-block tls")
+            # The listener refuses this name before a handshake starts (_greet), so this is a
+            # ClientHello it could not read the way the TLS layer does.  The upload must fail all
+            # the same, but asyncio closes the connection without sending the alert returned here.
+            self.log(
+                "tls_refused",
+                sni=name,
+                reason="clearcut-block tls",
+                note="refused by the TLS layer: the connection ends without the alert",
+            )
             return ssl.ALERT_DESCRIPTION_HANDSHAKE_FAILURE
         return None
+
+    async def _greet(self, conn: socket.socket, ctx: ssl.SSLContext) -> None:
+        """One new HTTPS connection.  With ``--clearcut-block tls`` a ClientHello for the Clearcut
+        host is answered with a fatal alert and the close, which fails the controller's upload
+        within milliseconds.  (The dns mode is not enough: on NXDOMAIN the firmware falls back to
+        8.8.8.8 and reaches the real host.)  Every other connection goes to asyncio's TLS with
+        its ClientHello still unread."""
+        try:
+            try:
+                hello = await asyncio.wait_for(_peek_hello(conn), timeout=self.cfg.idle_timeout)
+            except (TimeoutError, OSError):  # nothing sent in time, or gone already
+                conn.close()
+                return
+            name = client_hello_sni(hello)
+            if self.cfg.clearcut_block == "tls" and name in CLEARCUT_HOSTS:
+                self.log("tls_client_hello", sni=name)
+                self.log("tls_refused", sni=name, reason="clearcut-block tls")
+                with contextlib.suppress(OSError):
+                    # Read what was looked at and whatever came with it: closing a socket with
+                    # unread data resets the connection, and a reset can cost the peer the alert
+                    # sent just before it.
+                    conn.recv(MAX_TLS_RECORD_BYTES)
+                with contextlib.suppress(OSError):
+                    conn.send(HANDSHAKE_FAILURE_ALERT)
+                conn.close()
+                return
+            reader = asyncio.StreamReader(limit=MAX_HEAD_BYTES)
+            protocol = asyncio.StreamReaderProtocol(reader, lambda r, w: self._on_conn(r, w, True))
+        except BaseException:
+            conn.close()
+            raise
+        try:
+            # From here the socket is asyncio's, which closes it when the handshake fails.
+            await asyncio.get_running_loop().connect_accepted_socket(lambda: protocol, sock=conn, ssl=ctx)
+        except Exception:  # a failed handshake: asyncio.start_server swallows those too
+            pass
 
     # ---- lifecycle -----------------------------------------------------------------------
     async def start(self) -> None:
@@ -203,16 +383,21 @@ class HttpServer:
             self.http_ports.append(port)
             self.log("listening", proto="http", bind=self.cfg.bind, port=port)
 
-    async def _listen(self, port: int, tls: ssl.SSLContext | None) -> asyncio.Server:
+    async def _listen(self, port: int, tls: ssl.SSLContext | None) -> asyncio.Server | HelloServer:
+        srv: asyncio.Server | HelloServer
         try:
-            srv = await asyncio.start_server(
-                lambda r, w: self._on_conn(r, w, tls is not None),
-                self.cfg.bind,
-                port,
-                ssl=tls,
-                limit=MAX_HEAD_BYTES,
-                reuse_address=True,
-            )
+            if tls is not None:
+                ctx = tls
+                sockets = _listening_sockets(self.cfg.bind, port)
+                srv = HelloServer(sockets, lambda conn: self._greet(conn, ctx), self.log)
+            else:
+                srv = await asyncio.start_server(
+                    lambda r, w: self._on_conn(r, w, False),
+                    self.cfg.bind,
+                    port,
+                    limit=MAX_HEAD_BYTES,
+                    reuse_address=True,
+                )
         except OSError as e:
             proto = "https" if tls else "http"
             raise OSError(f"cannot listen on {self.cfg.bind}:{port} ({proto}): {bind_hint(port, 'TCP', e)}") from e

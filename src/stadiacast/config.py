@@ -51,7 +51,8 @@ class Config:
 
     # -- boot-time endpoints ---------------------------------------------------------------
     stadiaconfig: str = "passthrough"  # passthrough | file:PATH | json:{...}
-    clearcut_block: str = "off"  # off | tls (abort the TLS handshake for CLEARCUT_HOSTS) | dns (NXDOMAIN)
+    #: off | tls (answer a ClientHello for CLEARCUT_HOSTS with a fatal TLS alert) | dns (NXDOMAIN)
+    clearcut_block: str = "off"
     clearcut_close: bool = True  # close the Clearcut connection after the LogResponse
     rpc_responses: dict[str, bytes] = field(default_factory=dict)  # v1:METHOD -> canned body (overrides the schema)
     rpc_fields: dict[str, dict[str, Any]] = field(default_factory=dict)  # v1:METHOD -> response field overrides
