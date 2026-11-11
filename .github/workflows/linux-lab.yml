@@ -1,11 +1,13 @@
 name: Linux lab
 
-# The Linux pad against a real kernel, by hand: the uinput device `--gamepad uinput` creates, read
-# back through its event device as a game reads it, a game's force feedback, and the whole path
-# from the lab controller to the pad and back to its motors. Nothing is released.
+# The Linux-only paths against the real thing, by hand: the uinput device `--gamepad uinput`
+# creates, read back through its event device as a game reads it, a game's force feedback, the
+# whole path from the lab controller to the pad and back to its motors, and `--audio-source
+# system` recording a tone from a PulseAudio server. With ffmpeg installed, the audio tests that
+# the regular CI skips run here too. Nothing is released.
 #
-# The tests need a kernel with uinput. Where a hosted runner's kernel has none, the step that
-# prepares it says so and the tests skip; point `runner` at a self-hosted Linux machine then.
+# The pad tests need a kernel with uinput. Where a runner's kernel has none, the step that
+# prepares it says so and they skip; point `runner` at a self-hosted Linux machine then.
 
 on:
   workflow_dispatch:
@@ -28,9 +30,14 @@ jobs:
         with:
           python-version: "3.13"
           enable-cache: true
-      - name: Linux needs PortAudio for the audio extra
-        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - name: PortAudio for the audio extra, ffmpeg, and a sound server
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2 ffmpeg pulseaudio pulseaudio-utils
       - run: uv sync --all-extras --locked
+
+      - name: start the sound server, with the silent output it makes for a machine without a sound card
+        run: |
+          pulseaudio --start --exit-idle-time=-1
+          pactl info | grep -E "Server Name|Default Sink|Default Source"
 
       - name: give the runner's user uinput and the pads it creates
         run: |

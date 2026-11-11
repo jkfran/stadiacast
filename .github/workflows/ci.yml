@@ -29,6 +29,24 @@ jobs:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --all-extras --locked
+      - name: on Linux, let the pad tests reach the kernel's uinput (tests/test_linux_lab.py)
+        if: runner.os == 'Linux'
+        run: |
+          # No login session with a seat here, so the rules name a mode instead of the tag the
+          # README gives a person at the computer.
+          {
+            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0666", OPTIONS+="static_node=uinput"'
+            echo 'SUBSYSTEM=="input", KERNEL=="event*", MODE="0666"'
+          } | sudo tee /etc/udev/rules.d/99-stadiacast-lab.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo modprobe uinput || true
+          sudo udevadm trigger --name-match=uinput || true
+          sleep 1
+          if [ -c /dev/uinput ]; then
+            echo "STADIACAST_LINUX_LAB=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::this runner's kernel has no uinput device: the pad tests skip"
+          fi
       - run: uv run pytest -q
       - run: uv run python -m stadiacast.schema_compiler --check
 

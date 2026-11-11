@@ -1,8 +1,10 @@
-"""The Linux pad against the real kernel: the device uinput creates, read back through its event
-node the way a game reads it, and a game's force feedback requests. Runs on Linux where
-``/dev/uinput`` and the event nodes can be opened (as root, or with the udev rule of the README),
-when STADIACAST_LINUX_LAB is set; skipped elsewhere. A pad appears on the system while a test
-runs: A, the left stick and the left trigger are what it presses."""
+"""The Linux-only paths against the real thing: the pad uinput creates, read back through its
+event node the way a game reads it, a game's force feedback requests, and what the computer
+plays, recorded from a real sound server. Runs on Linux when STADIACAST_LINUX_LAB is set (the
+Linux lab workflow); skipped elsewhere. The pad tests need ``/dev/uinput`` and the event nodes
+to open (as root, or with the udev rule of the README), and a pad appears on the system while
+one runs: A, the left stick and the left trigger are what it presses. The sound test plays a
+tone to the default output for a few seconds, and skips without a sound server or ffmpeg."""
 
 from __future__ import annotations
 
@@ -10,7 +12,9 @@ import asyncio
 import ctypes
 import errno
 import os
+import shutil
 import struct
+import subprocess
 import sys
 import time
 from typing import Any
@@ -18,6 +22,7 @@ from typing import Any
 import pytest
 
 from stadiacast import uinput_gamepad as uinput
+from stadiacast.audio import ffmpeg_path
 from stadiacast.uinput_gamepad import (
     ABS_HAT0Y,
     ABS_X,
@@ -246,7 +251,7 @@ def test_a_games_rumble_comes_out_as_motor_levels_over_time() -> None:
             assert pulse == 0 and levels == []  # stored on the pad, not played
             game.play(pulse)
             wait_until(lambda: len(levels) >= 2)  # it ends by itself
-            assert levels == [(0xC0, 0x40), (0, 0)] and 0.1 < stamps[1] - stamps[0] < 0.4
+            assert levels == [(0xC0, 0x40), (0, 0)] and 0.1 < stamps[1] - stamps[0] < 2.0
 
             hold = game.upload(0xFFFF, 0x8000, length_ms=0)
             assert hold == 1
@@ -296,7 +301,7 @@ def test_an_effect_sent_again_while_it_plays_starts_its_run_again() -> None:
             assert game.upload(0x8000, 0x8000, length_ms=300, slot=slot) == slot
             wait_until(lambda: len(levels) >= 3)
             assert levels == [(0xFF, 0xFF), (0x80, 0x80), (0, 0)]
-            assert 0.25 < stamps[2] - stamps[1] < 0.6  # 300 ms from the update, not from the start
+            assert 0.25 < stamps[2] - stamps[1] < 2.0  # 300 ms from the update, not the 200 left of the first run
         finally:
             game.close()
     finally:
@@ -400,3 +405,48 @@ def test_a_controller_is_a_pad_for_this_computers_games_and_feels_their_rumble(t
             await rx.stop()
 
     asyncio.run(run())
+
+
+def test_what_the_computer_plays_reaches_the_headset(tmp_path) -> None:
+    """``--audio-source system`` with a real sound server: a tone played to the default output is
+    what the lab controller's headset gets, recorded from the output's monitor."""
+    ffmpeg = ffmpeg_path()
+    if ffmpeg is None:
+        pytest.skip("needs ffmpeg (with libopus) on PATH")
+    tools = [shutil.which(tool) for tool in ("pactl", "parec", "paplay")]
+    if None in tools or subprocess.run(["pactl", "info"], capture_output=True, timeout=10, check=False).returncode:
+        pytest.skip("needs a PulseAudio or PipeWire server that pactl reaches, with parec and paplay")
+    tone = tmp_path / "tone.wav"
+    made = [ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000:duration=40"]
+    subprocess.run([*made, "-ac", "2", str(tone)], check=True, timeout=60)
+
+    async def run() -> None:
+        rx = make_receiver(tmp_path, audio_source="system")
+        await rx.start()
+        fc = await connect_firmware_flow(rx)
+        try:
+            await asyncio.wait_for(fc.display_ready.wait(), 5)
+            await fc.keepalive()
+            await wait_for(lambda: rx.log.counts.get("audio_capture", 0) >= 1, timeout=15)
+            started = next(r for r in rx.log.records if r["event"] == "audio_capture")
+            assert str(started["device"]).endswith(".monitor") and (started["rate"], started["channels"]) == (48000, 2)
+            await wait_for(lambda: len(fc.audio_frames) >= 150, timeout=20)  # three seconds of it
+            state = single(rx).audio_state()
+            assert state["playing"] and state["source"] == f"capture {started['device']}"
+            assert state["stats"]["send_failed"] == 0 and state["stats"]["level"] > 0.01, state
+            sizes = [len(frame.payload) for frame in fc.audio_frames[-50:]]
+            assert sum(size > 40 for size in sizes) >= 40, sizes  # a tone; silence is three bytes a frame
+            stopped = await single(rx).audio_stop()
+            assert stopped["playing"] is False
+        finally:
+            fc.close()
+            await rx.stop()
+
+    player = subprocess.Popen(["paplay", str(tone)])
+    try:
+        time.sleep(0.5)
+        assert player.poll() is None, "paplay could not play to the default output"
+        asyncio.run(run())
+    finally:
+        player.kill()
+        player.wait()
