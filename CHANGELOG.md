@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
+A virtual gamepad on Linux, the controllers' live state as a document and as events for other
+programs, a way to stop a receiver that runs in the background, and headset sound on Linux
+that is what the computer plays.
+
 ### Added
 - A virtual gamepad on Linux: `--gamepad uinput` turns each controller into a wired Xbox 360
   controller for the games on the receiver's PC, through the kernel's uinput device, with
@@ -71,8 +77,8 @@ limits on what one request, datagram or device on the network can cost it.
   interrupted, and refuses credentials no network can have (a name over 32 bytes, a WPA
   password outside 8 to 63 characters) before it touches Bluetooth.
 - A controller that is switched off closes its link, and the receiver now lets go of it: no
-  more reports and checks to its address, its headset stream stops and its virtual pad is
-  unplugged, until its next boot.
+  more reports and checks to its address, its headset stream stops and its virtual pad lets go
+  of every button (on macOS it is unplugged), until its next boot.
 - The control endpoints (`/_rumble`, `/_start_game`, `/_audio`) refuse what a browser sends on
   behalf of a web page: any request other than `GET` that carries an `Origin` header.
 - A `file:` audio source has to be a file of this computer; a URL is refused.
@@ -213,7 +219,8 @@ confirmed against real controllers running the last Wi-Fi firmware, `ota.282115`
   security policy, code of conduct.
 - MIT License, with a `NOTICE` for the three protobuf schemas reproduced from the firmware.
 
-[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/jkfran/stadiacast/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/jkfran/stadiacast/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jkfran/stadiacast/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/jkfran/stadiacast/compare/v1.0.0...v1.0.1
