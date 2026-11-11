@@ -81,7 +81,7 @@ class Config:
     audio_follow_volume: bool = True  # Windows: scale the loopback capture by the volume slider (False: before it)
 
     # -- virtual gamepad (the input as a pad on this PC) -----------------------------------
-    gamepad: str = "off"  # off | vigem (Windows) | ojd (macOS); implies StartGame for rumble
+    gamepad: str = "off"  # off | vigem (Windows) | ojd (macOS) | uinput (Linux); implies StartGame for rumble
     gamepad_deadzone: bool = True  # apply XInput's stick deadzones (False: raw sticks)
     gamepad_profile: str = "game-controller-compatible"  # OJD: game-controller-compatible | sdl-compatible | generic
     ojd_path: str = ""  # OJD executable; empty finds ojd on PATH or the installed macOS app

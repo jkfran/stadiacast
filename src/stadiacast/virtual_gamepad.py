@@ -1,4 +1,4 @@
-"""A virtual gamepad per controller (Windows ViGEmBus or macOS OpenJoystickDriver).
+"""A virtual gamepad per controller (Windows ViGEmBus, macOS OpenJoystickDriver or Linux uinput).
 
 ``--gamepad vigem`` creates one ViGEm pad per controller through ``vgamepad`` (the ``gamepad``
 extra, over the ViGEmBus driver), feeds every decoded input report to it as XInput fields, and
@@ -11,6 +11,10 @@ tried again on the controller's next report after it reboots.
 
 ``--gamepad ojd`` is the same on macOS, where the pad is a feed process of the OpenJoystickDriver
 app (:mod:`stadiacast.ojd_gamepad`) and is closed when its controller goes away.
+
+``--gamepad uinput`` is the same on Linux, where the pad is an input device the receiver creates
+through the kernel's uinput (:mod:`stadiacast.uinput_gamepad`). It is removed when its controller
+goes away, as a wireless pad is when it is switched off.
 
 :class:`PadBackend` is the small surface the receiver drives, so the tests run the same code
 against a fake pad on every platform.
@@ -28,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from stadiacast.errors import SetupError
 from stadiacast.gamepad import XINPUT_LEFT_DEADZONE, XINPUT_RIGHT_DEADZONE, GamepadState
 from stadiacast.ojd_gamepad import OJDPad, find_ojd
+from stadiacast.uinput_gamepad import UinputPad, check_available
 
 if TYPE_CHECKING:
     from stadiacast.config import Config
@@ -232,8 +237,8 @@ class VirtualGamepads:
         self.rx = rx
         self.kind = kind
         #: A pad lives for one boot of its controller and is closed when the controller goes away
-        #: (an OJD feed is one of four), where a ViGEm pad, which takes seconds to create, stays
-        #: and is only let go of.
+        #: (an OJD feed is one of four, a uinput pad is made in no time), where a ViGEm pad, which
+        #: takes seconds to create, stays and is only let go of.
         self._per_boot = per_boot
         self._factory = backend_factory
         self._pads: dict[str, PadBackend] = {}
@@ -257,8 +262,11 @@ class VirtualGamepads:
             return cls(
                 cfg, log, rx, lambda label: OJDPad(label, executable, cfg.gamepad_profile), kind="ojd", per_boot=True
             )
+        if cfg.gamepad == "uinput":
+            check_available()  # the wrong system, no uinput, or no right to open it: said at start
+            return cls(cfg, log, rx, UinputPad, kind="uinput", per_boot=True)
         if cfg.gamepad != "vigem":
-            raise ValueError(f"unknown --gamepad {cfg.gamepad!r}; use off, vigem or ojd")
+            raise ValueError(f"unknown --gamepad {cfg.gamepad!r}; use off, vigem, ojd or uinput")
         if sys.platform != "win32":
             raise SetupError("--gamepad vigem is Windows only: it drives the ViGEmBus driver through vgamepad")
         try:
@@ -384,7 +392,10 @@ class VirtualGamepads:
         on_error = getattr(pad, "on_error", None)
         if on_error is not None:
             on_error(lambda error: loop.call_soon_threadsafe(self._backend_failed, label, pad, error))
-        self.log("gamepad_created", controller=label, kind=self.kind, slot=pad.slot, deadzone=self.cfg.gamepad_deadzone)
+        created: dict[str, Any] = {"kind": self.kind, "slot": pad.slot, "deadzone": self.cfg.gamepad_deadzone}
+        if self.kind == "uinput":
+            created["device"] = getattr(pad, "device", None)
+        self.log("gamepad_created", controller=label, **created)
         for state in self._pending.pop(label, ()):
             self._apply(label, pad, state)
             if label in self._failed:
@@ -468,7 +479,8 @@ class VirtualGamepads:
             self.log("gamepad_close_failed", controller=label, error=repr(e))
 
     def status(self) -> dict[str, Any]:
-        """Per label: the pad's XInput ``slot`` and its counters, or the ``error`` its creation ended in."""
+        """Per label: the pad's XInput ``slot`` and its counters, or the ``error`` its creation ended
+        in; a macOS pad names its ``kind`` and ``profile``, a Linux pad its ``kind`` and ``device``."""
         out: dict[str, Any] = {
             label: {"slot": pad.slot, "frames": self._frames.get(label, 0), "rumbles": self._rumbles.get(label, 0)}
             for label, pad in self._pads.items()
@@ -477,6 +489,11 @@ class VirtualGamepads:
         if self.kind == "ojd":
             for value in out.values():
                 value.update(kind="ojd", profile=self.cfg.gamepad_profile)
+        if self.kind == "uinput":
+            for label, value in out.items():
+                value.update(kind="uinput")
+                if label in self._pads:
+                    value.update(device=getattr(self._pads[label], "device", None))
         return out
 
 

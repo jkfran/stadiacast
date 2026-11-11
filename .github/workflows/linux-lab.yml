@@ -1,0 +1,76 @@
+name: Linux lab
+
+# The Linux pad against a real kernel, by hand: the uinput device `--gamepad uinput` creates, read
+# back through its event device as a game reads it, a game's force feedback, and the whole path
+# from the lab controller to the pad and back to its motors. Nothing is released.
+#
+# The tests need a kernel with uinput. Where a hosted runner's kernel has none, the step that
+# prepares it says so and the tests skip; point `runner` at a self-hosted Linux machine then.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "runs-on label: ubuntu-latest (hosted) or a self-hosted Linux runner"
+        default: ubuntu-latest
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Linux needs PortAudio for the audio extra
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - run: uv sync --all-extras --locked
+
+      - name: give the runner's user uinput and the pads it creates
+        run: |
+          uname -r
+          if [ ! -e /dev/uinput ]; then
+            sudo modprobe uinput || sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+            sudo modprobe uinput || true
+          fi
+          # The job has no login session with a seat, so the rules name a mode instead of the tag
+          # the README gives a person at the computer.
+          {
+            echo 'KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0666", OPTIONS+="static_node=uinput"'
+            echo 'SUBSYSTEM=="input", KERNEL=="event*", MODE="0666"'
+          } | sudo tee /etc/udev/rules.d/99-stadiacast-lab.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=uinput || true
+          sleep 1
+          if [ -c /dev/uinput ]; then
+            ls -l /dev/uinput
+            echo "STADIACAST_LINUX_LAB=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::this runner's kernel has no uinput device: the lab tests skip"
+          fi
+
+      - name: the whole test suite, with the pad on a real kernel where there is one
+        run: uv run pytest -q -rs
+
+      - name: what the kernel and udev make of a pad
+        if: env.STADIACAST_LINUX_LAB == '1'
+        run: |
+          uv run python - <<'PY'
+          import subprocess, time
+          from stadiacast.gamepad import GamepadState
+          from stadiacast.uinput_gamepad import UinputPad
+
+          pad = UinputPad("lab")
+          pad.apply(GamepadState().to_xinput())
+          time.sleep(1)
+          print("event device:", pad.device)
+          print(open("/proc/bus/input/devices").read().split("\n\n")[-2])
+          print(subprocess.run(["udevadm", "info", str(pad.device)], capture_output=True, text=True).stdout)
+          pad.close()
+          PY

@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- A virtual gamepad on Linux: `--gamepad uinput` turns each controller into a wired Xbox 360
+  controller for the games on the receiver's PC, through the kernel's uinput device, with
+  nothing to install. SDL, which Steam and most Linux games read gamepads through, takes it
+  for one, and a game's rumble comes back to the controller. The pad appears with the
+  controller's first input and goes when the controller is switched off.
 - `GET /_input`: what every controller is doing right now, in one small document: the state of
   its link, its address, battery and virtual pad, and the latest report with the buttons held
   by name, the sticks and the triggers. `GET /_events` sends the same document as server-sent

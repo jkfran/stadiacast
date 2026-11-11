@@ -119,6 +119,17 @@ shared code takes. A feed that ends by itself says so through `on_error`, with n
 to find out. `VirtualGamepads` closes a feed when its controller goes away, which frees one of
 the driver's four, and does it in a worker thread, since closing waits for the process.
 
+The Linux pad (`uinput_gamepad.py`, `--gamepad uinput`) is a device the receiver creates
+through `/dev/uinput`, with `ioctl` and the kernel's structures written out in the module, so
+that it needs no package. It copies what the kernel's `xpad` driver makes of a wired Xbox 360
+controller: the name, the USB ids, the eleven keys, six axes and the hat, and their ranges,
+which is what gives SDL its mapping. A report is written as the events that differ from the
+last one. Rumble comes the other way on the same file, as force feedback requests: a game
+uploads an effect, plays and stops it, and the kernel holds the game until each upload or
+erase is answered. Each pad has a thread for that, so a busy event loop never keeps a game
+waiting, and `Rumble` works out from the effects, their lengths and the gain what the two
+motors do at each moment. Like a feed, the pad lives for one boot of its controller.
+
 **`RtcEndpoint`** is one UDP socket and one peer. It demultiplexes datagrams (STUN / DTLS /
 RTP), runs the connectivity checks and keepalives, drives the DTLS handshake through pyOpenSSL
 memory BIOs, exports SRTP keys, and delivers application data (`raw_dtls` sessions) or decrypted

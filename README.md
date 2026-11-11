@@ -119,8 +119,9 @@ stadiacast --preset live --dns-upstream 192.168.1.1   # your router: the DNS sin
 - Nothing else for the basics: the receiver ships a certificate the controller accepts
   ([serving your own](docs/setup.md#certificate) is optional), and the executables include
   Python. An install from PyPI or from source needs Python 3.11 or newer.
-- Optional: ffmpeg for [headset audio](#headset-audio), the ViGEmBus driver for the
-  [virtual gamepad](#virtual-gamepad-windows) on Windows, `tcpdump` for packet captures.
+- Optional: ffmpeg for [headset audio](#headset-audio), a driver for the virtual gamepad on
+  [Windows](#virtual-gamepad-windows) and on [macOS](#virtual-gamepad-macos) (the one on
+  [Linux](#virtual-gamepad-linux) needs none), `tcpdump` for packet captures.
 
 ## Install
 
@@ -250,6 +251,40 @@ in System Settings → Game Controllers. The game's rumble comes back to the con
 the game session, which `--gamepad` starts for that reason. Every controller is a pad of its
 own, up to the four the driver allows, and `/_status` lists them under `gamepads`.
 
+## Virtual gamepad (Linux)
+
+`--gamepad uinput` turns each controller into a wired Xbox 360 controller for the games on a
+Linux PC, through the kernel's uinput device. There is nothing to install:
+
+```sh
+stadiacast --preset live --dns-upstream 192.168.1.1 --gamepad uinput
+```
+
+The pad has the buttons, the axes and the name the kernel gives a real one, and SDL, which
+Steam and most Linux games read gamepads through, takes it for an Xbox 360 controller. It
+appears with the controller's first input and is unplugged when the controller is switched
+off, as a wireless pad is.
+
+Creating a pad means opening `/dev/uinput`, which on most systems only root may do. A receiver
+that runs as root can. For one that does not, a udev rule gives the device to whoever sits at
+the computer, which is what Steam's own rules do where they are installed:
+
+```sh
+echo 'KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"' |
+    sudo tee /etc/udev/rules.d/60-stadiacast.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=uinput
+```
+
+On a computer nobody is logged in at, a server for instance, put `MODE="0660", GROUP="input"`
+in place of the `TAG` and run the receiver as a member of that group. Without the right to open
+the device, the receiver stops at start-up with one line that says so.
+
+Buttons, sticks and triggers map as on Windows, with the same deadzones (`--gamepad-deadzone
+off` for raw sticks); the Stadia button is the guide button. A game's rumble, which reaches
+the pad as force feedback, comes back to the controller through the game session, which
+`--gamepad` starts for that reason. Every controller is a pad of its own, and `/_status` lists
+them under `gamepads` with their event device.
+
 ## Development
 
 ```sh
@@ -265,8 +300,6 @@ against a receiver in lab mode, and how to test against a real controller safely
 
 1. **First-boot autoconnect:** detect a controller in BLE setup mode and provision it onto the
    network automatically (today `stadiacast-provision` is the manual version).
-2. **Virtual gamepad on Linux:** Windows (`--gamepad vigem`) and macOS (`--gamepad ojd`) have
-   one; Linux (uinput) is open.
 
 ## Security and privacy
 
