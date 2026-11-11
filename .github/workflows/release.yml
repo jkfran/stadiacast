@@ -5,6 +5,8 @@ name: Release
 # the release was created first, otherwise a new draft with the CHANGELOG section as its notes.
 # Run by hand (workflow_dispatch) it only builds and keeps the archives as workflow artifacts.
 # Only the job that attaches the files may write to the repository; the builds just read it.
+# That job runs in the project's own repository only: in a fork a tag builds the same archives
+# as workflow artifacts, and no release appears there under this project's name and version.
 
 on:
   push:
@@ -79,7 +81,8 @@ jobs:
 
   release:
     name: attach to the release
-    if: startsWith(github.ref, 'refs/tags/v')
+    # the repository is named here: after a rename or a transfer this line has to follow
+    if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'jkfran/stadiacast'
     needs: executables
     runs-on: ubuntu-latest
     timeout-minutes: 10

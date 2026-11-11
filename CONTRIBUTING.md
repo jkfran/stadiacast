@@ -142,3 +142,9 @@ through [SECURITY.md](SECURITY.md), not the public tracker.
    it again once they are there; files already on PyPI are skipped.
 5. `make exe` builds the executables for the current platform into `dist/`, for a check before
    tagging; `gh workflow run release.yml` builds all three as workflow artifacts without a tag.
+
+These steps are this repository's. The Release workflow creates a release, and the Publish
+workflow uploads to PyPI, only here; in a fork a tag builds the same files and keeps them as
+workflow artifacts. A fork that publishes builds of its own gives them a version of its own,
+for example a local label such as `1.1.1+name`, so that two different programs never carry the
+same name and version.

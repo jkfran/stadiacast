@@ -3,7 +3,8 @@
 # step, and this takes the files from the release, so PyPI carries exactly what GitHub does.
 # The manual trigger publishes an existing release by tag. No token anywhere: PyPI trusts this
 # workflow's identity (OpenID Connect) through the trusted publisher registered on PyPI for
-# the project, which names this file and the `pypi` environment.
+# the project, which names this repository, this file and the `pypi` environment. PyPI refuses
+# every other repository, so in a fork the job is skipped instead of failing.
 name: Publish to PyPI
 
 on:
@@ -21,6 +22,8 @@ permissions:
 jobs:
   pypi:
     name: upload to PyPI
+    # the repository is named here: after a rename or a transfer this line has to follow
+    if: github.repository == 'jkfran/stadiacast'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
