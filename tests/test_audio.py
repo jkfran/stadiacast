@@ -684,10 +684,12 @@ def _loopback_input_present() -> bool:
 
 
 @pytest.mark.skipif(
-    not _loopback_input_present() or ffmpeg_path() is None, reason="needs PortAudio, a loopback input and ffmpeg"
+    sys.platform != "darwin" or not _loopback_input_present() or ffmpeg_path() is None,
+    reason="needs a Mac with a loopback input (BlackHole) and ffmpeg",
 )
 def test_the_system_source_keeps_real_time() -> None:
-    """The whole capture chain on a machine with a loopback device: the stream keeps up."""
+    """The whole capture chain on a Mac with a loopback device: the stream keeps up. Windows and
+    Linux have this in their lab tests, against a real loopback and a real sound server."""
 
     async def run() -> None:
         ep = _StubEndpoint()
