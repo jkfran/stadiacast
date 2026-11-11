@@ -213,6 +213,94 @@ def test_a_response_nobody_reads_is_given_up_after_the_idle_timeout(tmp_path):
     asyncio.run(run())
 
 
+class Pieces:
+    """A streamed body made of the given pieces; ``closed`` counts the calls of ``close``."""
+
+    def __init__(self, pieces: list[bytes]) -> None:
+        self.pieces = list(pieces)
+        self.closed = 0
+
+    async def next_chunk(self) -> bytes | None:
+        await asyncio.sleep(0.01)
+        return self.pieces.pop(0) if self.pieces else None
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+def test_a_streamed_body_is_written_piece_by_piece_and_ends_the_connection(tmp_path):
+    body = Pieces([b"one\n", b"two\n", b"three\n"])
+
+    async def handler(_req: HttpRequest) -> HttpResponse:
+        return HttpResponse(200, b"head\n", "text/plain", stream=body)
+
+    async def run():
+        srv, log = await _serve(tmp_path, handler)
+        try:
+            out = await _talk(srv.http_ports[0], b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")  # keep-alive is asked for
+        finally:
+            await srv.stop()
+        head, _, sent = out.partition(b"\r\n\r\n")
+        assert sent == b"head\none\ntwo\nthree\n"
+        assert b"Content-Length" not in head and b"Connection: close" in head
+        assert body.closed == 1 and log.counts.get("tcp_close", 0) == 1
+
+    asyncio.run(run())
+
+
+def test_a_stream_nobody_reads_is_given_up_after_the_idle_timeout(tmp_path):
+    body = Pieces([b"x" * (1024 * 1024)] * 64)  # far more than the socket buffers take
+
+    async def handler(_req: HttpRequest) -> HttpResponse:
+        return HttpResponse(200, stream=body)
+
+    async def run():
+        srv, log = await _serve(tmp_path, handler, idle_timeout=0.2)
+        try:
+            _reader, writer = await asyncio.open_connection("127.0.0.1", srv.http_ports[0])
+            writer.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            await writer.drain()
+            for _ in range(100):  # the client never reads; the server gives up by itself
+                if log.counts.get("tcp_close", 0):
+                    break
+                await asyncio.sleep(0.05)
+            assert log.counts.get("tcp_close", 0) == 1 and body.closed == 1
+            writer.close()
+        finally:
+            await srv.stop()
+        if sys.platform != "win32":  # Windows takes every send into its buffers: the stream is written out
+            assert body.pieces
+            assert [r.get("stalled") for r in log.records if r["event"] == "http_idle_timeout"] == [True]
+
+    asyncio.run(run())
+
+
+def test_a_stream_whose_head_cannot_be_written_is_closed_all_the_same(tmp_path):
+    body = Pieces([b"never sent"])
+
+    async def handler(_req: HttpRequest) -> HttpResponse:
+        return HttpResponse(200, b"x" * (32 * 1024 * 1024), stream=body)  # what comes before the stream stalls
+
+    async def run():
+        srv, log = await _serve(tmp_path, handler, idle_timeout=0.2)
+        try:
+            _reader, writer = await asyncio.open_connection("127.0.0.1", srv.http_ports[0])
+            writer.write(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            await writer.drain()
+            for _ in range(100):
+                if log.counts.get("tcp_close", 0):
+                    break
+                await asyncio.sleep(0.05)
+            writer.close()
+        finally:
+            await srv.stop()
+        assert body.closed == 1
+        if sys.platform != "win32":
+            assert body.pieces == [b"never sent"]
+
+    asyncio.run(run())
+
+
 def test_connections_beyond_the_limit_are_closed_on_arrival(tmp_path, monkeypatch):
     monkeypatch.setattr(http_server, "MAX_CONNECTIONS", 2)
 

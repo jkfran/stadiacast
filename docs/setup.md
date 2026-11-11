@@ -73,7 +73,7 @@ Ports used by the receiver:
 | 53 TCP/UDP | DNS | the DNS sink (`--dns-upstream` spawns it) |
 | 123 UDP | SNTP | time for the controller (`--sntp`, on in the `live` preset) |
 | 443 TCP | HTTPS | the Google endpoints the DNS sink redirects |
-| 80, 8008 TCP | HTTP | the local control endpoints `/_status`, `/_rumble`, `/_start_game`, `/_audio` |
+| 80, 8008 TCP | HTTP | the local control endpoints `/_status`, `/_input`, `/_events`, `/_rumble`, `/_start_game`, `/_audio`, `/_shutdown` |
 | 40000 UDP | STUN/DTLS | the display link of the first controller (`c0`) |
 | 40001 UDP | STUN/DTLS | the game-streaming session of the first controller |
 | 40002, 40003 UDP, ... | STUN/DTLS | the same pair for the second controller (`c1`), and so on: base port + 2 per controller |
@@ -156,6 +156,26 @@ battery level, headset and headset stream (`playback`), and with `--gamepad` eve
 under `gamepads`, with its XInput `slot` or the `error` it ended in; a macOS pad has no slot
 and names its `kind` and `profile`. `-v` echoes the bulky log fields (request bodies, decoded
 protobufs) to the console too.
+
+`GET /_input` is the short version, for a program that shows or uses what the controllers do:
+per controller the state of its link (`display_state`, `ready` or `input` once it is up), its
+`ip`, the seconds since it was last heard from (`last_seen_s`), `battery_percent`, `headset`,
+its virtual `gamepad`, and `input`, the latest report: the buttons held by name (`held`), the
+sticks (`lx`, `ly`, `rx`, `ry`, -32768 to 32767, up is positive) and the triggers (`l2`, `r2`,
+0 to 255). `GET /_events` sends the same document as server-sent events (`event: input`): one
+at once, one whenever something in it changes, and one every 2 s otherwise. A program that
+follows the controllers reads this stream instead of asking again and again, since every
+request is a record in the log. Eight streams can be open at a time.
+
+```sh
+curl -s http://192.168.2.1/_input | jq '.controllers | map_values(.input.held)'
+curl -N http://192.168.2.1/_events
+```
+
+`POST /_shutdown` stops the receiver as Ctrl-C does, with its helper processes, the headset
+streams and the virtual pads. It is taken from the receiver's own computer only
+(`curl -X POST http://127.0.0.1/_shutdown`) and is the way to stop a receiver that runs in the
+background on Windows, where it cannot be sent a Ctrl-C.
 
 `/_audio` controls the headset stream while the receiver runs: `GET` shows it, and a `POST`
 names an action, `{"do": "start", "source": "system"}` (optionally with `volume` and

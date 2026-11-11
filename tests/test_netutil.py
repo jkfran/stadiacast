@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from stadiacast.netutil import bind_hint, fetch_upstream, is_local_address, local_ip_towards
+from stadiacast.netutil import bind_hint, fetch_upstream, is_local_address, is_loopback, local_ip_towards
 
 
 @pytest.mark.parametrize(
@@ -29,6 +29,23 @@ from stadiacast.netutil import bind_hint, fetch_upstream, is_local_address, loca
 )
 def test_is_local_address(ip, local):
     assert is_local_address(ip) is local
+
+
+@pytest.mark.parametrize(
+    ("ip", "loopback"),
+    [
+        ("127.0.0.1", True),
+        ("127.8.9.10", True),
+        ("::1", True),
+        ("::ffff:127.0.0.1", True),
+        ("192.168.2.1", False),
+        ("::ffff:192.168.2.1", False),
+        ("fe80::1", False),
+        ("localhost", False),
+    ],
+)
+def test_is_loopback(ip, loopback):
+    assert is_loopback(ip) is loopback
 
 
 def test_local_ip_towards_loopback():

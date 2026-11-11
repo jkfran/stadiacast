@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -214,6 +215,27 @@ def test_the_receiver_is_stopped_when_its_task_is_cancelled(tmp_path, capsys):
 
     asyncio.run(run())
     assert events(tmp_path)[-1] == "stopped" and "ready" in events(tmp_path)
+
+
+def test_a_shutdown_request_stops_the_receiver_as_ctrl_c_does(tmp_path, capsys):
+    async def run() -> int:
+        task = asyncio.get_running_loop().create_task(cli.amain(lab_config(tmp_path)))
+        port = None
+        for _ in range(200):
+            said = re.search(r"ready: https :\d+  http \[(\d+)\]", capsys.readouterr().out)
+            if said:
+                port = int(said.group(1))
+                break
+            await asyncio.sleep(0.01)
+        assert port is not None
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"POST /_shutdown HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n")
+        assert (await asyncio.wait_for(reader.read(), 5)).startswith(b"HTTP/1.1 200 OK")
+        writer.close()
+        return await asyncio.wait_for(task, 10)
+
+    assert asyncio.run(run()) == 0
+    assert events(tmp_path)[-1] == "stopped" and "shutdown_requested" in events(tmp_path)
 
 
 def test_a_start_that_fails_stops_what_it_started_and_reports_the_port(tmp_path, capsys):

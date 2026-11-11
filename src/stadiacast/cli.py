@@ -500,7 +500,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Config:
 
 async def amain(cfg: Config) -> int:
     receiver = Receiver(cfg)
-    stop = asyncio.Event()
+    stop = receiver.stop_requested  # Ctrl-C, SIGTERM or POST /_shutdown
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:

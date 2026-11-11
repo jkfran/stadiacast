@@ -36,7 +36,7 @@ from stadiacast.errors import SetupError
 from stadiacast.helpers import DNS_SINK, SNTP_SERVER, helper_command
 from stadiacast.http_server import HttpRequest, HttpResponse, HttpServer
 from stadiacast.log import EventLog
-from stadiacast.netutil import bind_hint, fetch_upstream, local_ip_towards
+from stadiacast.netutil import bind_hint, fetch_upstream, is_loopback, local_ip_towards
 from stadiacast.protos import Protos, decode_unknown, printable
 from stadiacast.virtual_gamepad import VirtualGamepads
 
@@ -51,6 +51,14 @@ LOGGED_BODY_BYTES = 16 * 1024
 #: many of them are answered.
 OMAHA_REQUEST_BYTES = 16 * 1024
 OMAHA_APPS = 16
+#: ``/_events`` streams open at once; one more is refused.
+MAX_EVENT_STREAMS = 8
+#: Seconds after which an ``/_events`` stream sends the live state again although nothing in it
+#: changed: the ages in it stay current, and a client that has gone is found out.
+EVENTS_HEARTBEAT = 2.0
+#: Seconds an ``/_events`` stream lets pass after a change before it sends, so that the changes
+#: of a moving stick, which come faster than a view shows them, share one event.
+EVENTS_MIN_GAP = 1 / 60
 
 RPC_PATH = re.compile(r"^/v1:([A-Za-z0-9_]+)$")
 
@@ -65,6 +73,39 @@ def _tail(path: str, lines: int = 5) -> list[str]:
     except OSError:
         return []
     return [line.strip() for line in text.splitlines() if line.strip()][-lines:]
+
+
+class LiveStream:
+    """One ``/_events`` client: the live state (:meth:`Receiver.live_state`) as server-sent events.
+
+    The first event goes out at once, the next whenever something in the state changes or
+    ``EVENTS_HEARTBEAT`` seconds have passed, and the stream ends when the receiver stops.
+    """
+
+    def __init__(self, receiver: Receiver) -> None:
+        self.rx = receiver
+        self.changed = asyncio.Event()  # set by Receiver.live_changed
+        self._begun = False
+
+    async def next_chunk(self) -> bytes | None:
+        head = b""
+        if not self._begun:
+            self._begun = True
+            head = b"retry: 1000\n\n"  # how long a browser waits before it connects again
+        else:
+            try:
+                await asyncio.wait_for(self.changed.wait(), EVENTS_HEARTBEAT)
+            except TimeoutError:
+                pass
+            else:
+                await asyncio.sleep(EVENTS_MIN_GAP)
+        if self.rx.stopping:
+            return None
+        self.changed.clear()
+        return head + b"event: input\ndata: " + json.dumps(self.rx.live_state(), default=str).encode() + b"\n\n"
+
+    def close(self) -> None:
+        self.rx.event_streams.discard(self)
 
 
 class Receiver:
@@ -94,6 +135,10 @@ class Receiver:
         self._dns_proc: asyncio.subprocess.Process | None = None
         self._sntp_proc: asyncio.subprocess.Process | None = None
         self._helper_watchers: list[asyncio.Task[None]] = []
+        self.event_streams: set[LiveStream] = set()  # the /_events clients
+        #: Set by ``POST /_shutdown``; whoever runs the receiver waits for it, as for Ctrl-C.
+        self.stop_requested = asyncio.Event()
+        self.stopping = False
         self.started = False
 
     def now(self) -> float:
@@ -168,6 +213,8 @@ class Receiver:
                     raise OSError(bind_hint(port, protocol, e)) from e
 
     async def stop(self) -> None:
+        self.stopping = True
+        self.live_changed()  # the /_events streams end here, before their listeners are waited for
         if self._stats_task:
             self._stats_task.cancel()
             self._stats_task = None
@@ -339,6 +386,7 @@ class Receiver:
             display_token=ctl.display_token,
             controllers=len(self.controllers),
         )
+        self.live_changed()
         return ctl
 
     def _evict(self, ctl: ControllerSession) -> None:
@@ -356,6 +404,7 @@ class Receiver:
             for k in [k for k, v in table.items() if v is ctl]:
                 del table[k]
         self._release_slot(ctl.slot)
+        self.live_changed()
 
     def _release_slot(self, slot: int) -> None:
         self._free_slots.append(slot)
@@ -489,6 +538,12 @@ class Receiver:
             return HttpResponse(
                 200, json.dumps(self.status(), indent=1, default=str).encode(), "application/json", handler="status"
             )
+        if path == "/_input":
+            return self._json(200, self.live_state(), handler="input")
+        if path == "/_events":
+            return self._events(req)
+        if path == "/_shutdown":
+            return self._shutdown(req)
         if path in ("/_start_game", "/_rumble"):
             return self._control(req)
         if path == "/_audio":
@@ -564,6 +619,34 @@ class Receiver:
             return self._json(400, {"error": str(e)}, handler="audio")
         out["controller"] = picked.label
         return self._json(200, out, handler="audio")
+
+    def _events(self, req: HttpRequest) -> HttpResponse:
+        """``GET /_events``: the live state as server-sent events (:class:`LiveStream`)."""
+        if req.method != "GET":
+            return HttpResponse(405, b"", handler="events")
+        if len(self.event_streams) >= MAX_EVENT_STREAMS:
+            return self._json(503, {"error": f"{MAX_EVENT_STREAMS} streams are open already"}, handler="events")
+        stream = LiveStream(self)
+        self.event_streams.add(stream)
+        return HttpResponse(
+            200,
+            content_type="text/event-stream",
+            headers=[("Cache-Control", "no-store")],
+            handler="events",
+            stream=stream,
+        )
+
+    def _shutdown(self, req: HttpRequest) -> HttpResponse:
+        """``POST /_shutdown``: stop the receiver as Ctrl-C does, helper processes, streams and
+        virtual pads included.  A receiver that runs in the background on Windows cannot be sent a
+        Ctrl-C, and one that is killed leaves its helpers behind.  Taken from this computer only."""
+        if req.method != "POST":
+            return HttpResponse(405, b"", handler="shutdown")
+        if req.peer is None or not is_loopback(req.peer[0]):
+            return self._json(403, {"error": "only from the computer the receiver runs on"}, handler="shutdown")
+        self.log("shutdown_requested", peer=req.peer)
+        self.stop_requested.set()
+        return HttpResponse(200, b'{"ok": true}', "application/json", handler="shutdown", close=True)
 
     # ---- boot-time endpoints -------------------------------------------------------------
     async def _stadiaconfig(self, req: HttpRequest) -> HttpResponse:
@@ -798,6 +881,51 @@ class Receiver:
                         )
         except asyncio.CancelledError:
             pass
+
+    def live_changed(self) -> None:
+        """Something the live state shows has changed: every ``/_events`` stream sends it."""
+        for stream in self.event_streams:
+            stream.changed.set()
+
+    def live_state(self) -> dict[str, Any]:
+        """The ``/_input`` document: what each controller is doing right now.
+
+        The short version of ``/_status``, which is everything the receiver knows; ``/_events``
+        sends it whenever it changes.  Per controller: ``display_state`` (``ready`` or ``input``
+        once the link is up), ``ip``, ``last_seen_s`` (seconds since anything came from it; a
+        connected controller is heard from every 1.5 s), ``battery_percent``, ``headset``, its
+        virtual ``gamepad`` as in ``/_status``, and ``input``: the latest report with the held
+        buttons by name and ``age_s``, or ``None`` when this boot has sent none.
+        """
+        now = time.monotonic()
+        pads = self.gamepads.status() if self.gamepads is not None else {}
+        controllers: dict[str, Any] = {}
+        for ctl in self.controllers.values():
+            display = ctl.session["display"]
+            report: dict[str, Any] | None = None
+            if ctl.latest_input is not None:
+                state, at = ctl.latest_input
+                report = {
+                    "buttons": state.buttons,
+                    "held": state.held(),
+                    "lx": state.lx,
+                    "ly": state.ly,
+                    "rx": state.rx,
+                    "ry": state.ry,
+                    "l2": state.l2,
+                    "r2": state.r2,
+                    "age_s": round(now - at, 2),
+                }
+            controllers[ctl.label] = {
+                "display_state": ctl.display_state,
+                "ip": ctl.ip,
+                "last_seen_s": round(now - ctl.last_seen, 1),
+                "battery_percent": display["battery_percent"],
+                "headset": display["headset"],
+                "gamepad": pads.get(ctl.label),
+                "input": report,
+            }
+        return {"version": __version__, "gamepad": self.cfg.gamepad, "controllers": controllers}
 
     def status(self) -> dict[str, Any]:
         """The ``/_status`` document."""

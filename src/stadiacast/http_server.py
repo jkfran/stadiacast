@@ -9,7 +9,8 @@ the one for the Clearcut host is answered with a TLS alert (see ``HelloServer``)
 
 Every listener is open to the whole network, so nothing a client does may hold the server: a
 request has ``idle_timeout`` seconds for its head and as long again for its body, a response as
-long to be taken, and the connections open at once are counted.
+long to be taken, and the connections open at once are counted.  A response that is a stream
+(``HttpResponse.stream``) lasts for as long as its client takes it, each piece within that time.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from stadiacast import SERVER_NAME, __version__
@@ -246,6 +247,16 @@ class HttpRequest:
         return conn == "close" or (self.version == "HTTP/1.0" and conn != "keep-alive")
 
 
+class BodyStream(Protocol):
+    """A response body that is written as it is produced."""
+
+    async def next_chunk(self) -> bytes | None:
+        """The next piece to write, when there is one; ``None`` ends the response."""
+
+    def close(self) -> None:
+        """The response is over, written to its end or given up: called once, in either case."""
+
+
 @dataclass
 class HttpResponse:
     status: int = 200
@@ -256,6 +267,8 @@ class HttpResponse:
     note: str | None = None  # free-text remark for the log (assumptions, fallbacks)
     extra_log: dict[str, Any] = field(default_factory=dict)  # merged into the http_request record
     close: bool = False  # close the connection after this response
+    # Written after ``body`` piece by piece, without a Content-Length: the connection ends with it.
+    stream: BodyStream | None = None
 
 
 Handler = Callable[[HttpRequest], Awaitable[HttpResponse]]
@@ -478,8 +491,14 @@ class HttpServer:
                     break
                 requests += 1
                 resp = await self.handler(req)
-                await asyncio.wait_for(self._write(writer, req, resp), timeout=self.cfg.idle_timeout)
-                if resp.close or req.wants_close():
+                try:
+                    await asyncio.wait_for(self._write(writer, req, resp), timeout=self.cfg.idle_timeout)
+                    if resp.stream is not None:
+                        await self._write_stream(writer, resp.stream)
+                finally:
+                    if resp.stream is not None:
+                        resp.stream.close()
+                if resp.close or req.wants_close() or resp.stream is not None:
                     break
         except (ConnectionResetError, BrokenPipeError, asyncio.IncompleteReadError):
             pass
@@ -559,7 +578,7 @@ class HttpServer:
         await asyncio.wait_for(writer.drain(), timeout=self.cfg.idle_timeout)
 
     async def _write(self, writer: asyncio.StreamWriter, req: HttpRequest, resp: HttpResponse) -> None:
-        close = resp.close or req.wants_close()
+        close = resp.close or req.wants_close() or resp.stream is not None
         headers = [
             ("Date", email.utils.formatdate(self.clock(), usegmt=True)),
             ("Server", f"{SERVER_NAME}/{__version__}"),
@@ -567,7 +586,8 @@ class HttpServer:
         if resp.content_type:
             headers.append(("Content-Type", resp.content_type))
         headers += list(resp.headers)
-        headers.append(("Content-Length", str(len(resp.body))))
+        if resp.stream is None:
+            headers.append(("Content-Length", str(len(resp.body))))
         headers.append(("Connection", "close" if close else "keep-alive"))
         head = (
             f"HTTP/1.1 {resp.status} {reason_phrase(resp.status)}\r\n"
@@ -576,3 +596,10 @@ class HttpServer:
         )
         writer.write(head.encode("latin-1") + resp.body)
         await writer.drain()
+
+    async def _write_stream(self, writer: asyncio.StreamWriter, stream: BodyStream) -> None:
+        """Write a body as it is produced.  A piece the client does not take within ``idle_timeout``
+        seconds ends the connection, as a whole response would."""
+        while (piece := await stream.next_chunk()) is not None:
+            writer.write(piece)
+            await asyncio.wait_for(writer.drain(), timeout=self.cfg.idle_timeout)

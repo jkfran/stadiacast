@@ -57,13 +57,17 @@ connectivity check and `stadiaconfig` when their names are redirected to it, whi
 DNS sink does not do) and hands everything that identifies a controller to that controller's
 session. It is also the registry: `controller_for()` finds or creates the session for a request.
 Its own address towards the controller and the `stadiaconfig` fetch come from `netutil.py`,
-which the helpers share for the message on a port that is taken.
+which the helpers share for the message on a port that is taken. `live_state()` is the
+`/_input` document, and whatever changes something in it calls `live_changed()`, which wakes
+the `/_events` clients (a `LiveStream` each).
 
 **`HttpServer`** frames HTTP/1.1 and owns the listeners. The HTTPS one accepts its connections
 itself (`HelloServer`) and reads the server name in each ClientHello before the TLS layer does:
 a ClientHello for the Clearcut host is answered with a TLS alert and closed (protocol.md §7),
 and every other connection is handed to asyncio's TLS with nothing read from it. asyncio's own
 TLS listener cannot do that, since it closes a refused handshake without sending the alert.
+A response can carry a `stream`, a body that is written piece by piece as it is produced and
+ends the connection: the `/_events` streams are the one use.
 
 **`ControllerSession`** is one controller as the receiver sees it: the discovery RPCs
 (`register`, `discover`), the GMsg queue and long poll (`queue_gmsg`, `gmsg_poll`), the

@@ -15,14 +15,16 @@ anywhere else:
 
 - **Controllers are not authenticated.** Any device on the network that speaks the protocol is
   taken for a controller, and can take the place of one that is connected.
-- **The control endpoints have no login.** `/_status`, `/_rumble`, `/_start_game` and `/_audio`
-  answer on every listener (443, 80 and 8008) to anyone who can reach it. `/_status` shows each
-  controller's serial number, device ids, address and session state, the credentials of its
-  WebRTC sessions included, and the run directory. `/_rumble` and `/_start_game` act on a
-  controller. `/_audio` starts and stops the stream to a controller's headset from a sound file
-  of this computer, from what the computer plays or from one of its capture devices, a
-  microphone included. What a browser sends on behalf of a web page is refused (any request
-  other than `GET` that carries an `Origin` header).
+- **The control endpoints have no login.** `/_status`, `/_input`, `/_events`, `/_rumble`,
+  `/_start_game` and `/_audio` answer on every listener (443, 80 and 8008) to anyone who can
+  reach it. `/_status` shows each controller's serial number, device ids, address and session
+  state, the credentials of its WebRTC sessions included, and the run directory. `/_input` and
+  `/_events` show what is pressed on each controller as it happens. `/_rumble` and
+  `/_start_game` act on a controller. `/_audio` starts and stops the stream to a controller's
+  headset from a sound file of this computer, from what the computer plays or from one of its
+  capture devices, a microphone included. `/_shutdown` stops the receiver and is taken from its
+  own computer only. What a browser sends on behalf of a web page is refused (any request other
+  than `GET` that carries an `Origin` header).
 - **It impersonates Google hostnames** for the clients that resolve names through its DNS sink,
   and the sink answers whoever asks it. Only point the devices at it that you want to talk to
   the receiver; names it does not redirect are forwarded to your resolver unchanged.

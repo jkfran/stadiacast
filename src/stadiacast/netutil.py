@@ -57,6 +57,16 @@ def is_local_address(ip: str) -> bool:
     return addr.is_private or addr.is_loopback or addr.is_link_local
 
 
+def is_loopback(ip: str) -> bool:
+    """True for an address of this computer's loopback interface, also as IPv6 writes an IPv4 one."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return bool((mapped or addr).is_loopback)
+
+
 async def fetch_upstream(
     url: str, own_ip: str | None, timeout: float = 6.0
 ) -> tuple[int | None, str | None, bytes, str | None]:

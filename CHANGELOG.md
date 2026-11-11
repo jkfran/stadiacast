@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `GET /_input`: what every controller is doing right now, in one small document: the state of
+  its link, its address, battery and virtual pad, and the latest report with the buttons held
+  by name, the sticks and the triggers. `GET /_events` sends the same document as server-sent
+  events, one whenever something in it changes, for a program that shows or uses the input
+  without reading the log.
+- `POST /_shutdown` stops the receiver as Ctrl-C does, helper processes, headset streams and
+  virtual pads included. It is taken from the receiver's own computer only, and is the way to
+  stop a receiver that runs in the background on Windows.
+
 ## [1.1.1] - 2026-11-10
 
 A wake connects about 15 seconds sooner: the controller no longer waits on the analytics

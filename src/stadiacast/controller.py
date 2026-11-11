@@ -146,6 +146,8 @@ class ControllerSession:
         self._rpc_ticket = 0
         self._rpc_pending: dict[int, str] = {}  # tickets of our requests -> purpose
         self._last_input: GamepadState | None = None  # previous ControllerToDisplay #3 report
+        #: This boot's latest gamepad report from either channel, and when it came (monotonic).
+        self.latest_input: tuple[GamepadState, float] | None = None
         self._audio: AudioSender | None = None  # headset jack, created when a stream starts
         # The stream's settings, kept across starts and stops (a sender only lives while it plays).
         self._audio_volume = _clamp_volume(self.cfg.audio_volume)
@@ -225,11 +227,13 @@ class ControllerSession:
         self._rpc_pending.clear()
         self._rpc_ticket = 0
         self._last_input = None
+        self.latest_input = None  # nothing it held is held any more
         self.session["display"] = _fresh_display_session()
         self._stop_audio()
         if self.rx.gamepads is not None:
             self.rx.gamepads.release(self.label)
         self.game.reset()
+        self.rx.live_changed()
 
     def status(self) -> dict[str, Any]:
         return {
@@ -797,6 +801,7 @@ class ControllerSession:
         if DISPLAY_STATES.index(state) > DISPLAY_STATES.index(d["state"]):
             d["state"] = state
             self.log("display_state", display_state=state, **info)
+            self.rx.live_changed()
             if state == "ready":
                 self._log_hardware_summary()
             if DISPLAY_STATES.index(state) >= DISPLAY_STATES.index("ready"):
@@ -969,6 +974,7 @@ class ControllerSession:
             headset = _as_bool(state.get("f4"))  # a plug in the jack, as of this snapshot
             if headset is not None:
                 d["headset"] = headset
+                self.rx.live_changed()
             if not self.serial and isinstance(state.get("f17"), str) and state["f17"].strip():
                 self.serial = state["f17"].strip()  # f17 is the serial too, for when the header never came
             self.log(
@@ -1026,6 +1032,8 @@ class ControllerSession:
         d["battery_percent"] = pct
         d["battery_samples"] += 1
         self.log("controller_battery", _quiet=not changed, percent=pct, level=round(level, 4), n=d["battery_samples"])
+        if changed:
+            self.rx.live_changed()
 
     def _on_audio_config(self, m: Any) -> None:
         """``ControllerToDisplay`` #4: the audio configuration changed, which means the headset moved.
@@ -1041,6 +1049,7 @@ class ControllerSession:
         d["audio_events"] += 1
         if mode in (0, 1):
             d["headset"] = mode == 1
+            self.rx.live_changed()
         self.log("controller_audio_config", n=d["audio_events"], mode=mode, headset=d["headset"], audio=info)
 
     def _answer_request(self, ticket: int | None, variant: str | None, msg: Any, quiet: bool = False) -> None:
@@ -1090,4 +1099,7 @@ class ControllerSession:
         """Log one decoded input event, stamped with this controller, and hand it to the receiver's queue."""
         ev["controller"] = self.label
         self.log("input", **ev)
+        if "axes" in ev:  # a gamepad report; the game session's other events carry none
+            self.latest_input = (GamepadState.from_event(ev), time.monotonic())
+            self.rx.live_changed()
         self.rx.publish_event(ev)
