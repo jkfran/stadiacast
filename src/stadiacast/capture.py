@@ -4,11 +4,15 @@ The capture runs in this process and the sender pipes the PCM into ffmpeg's stdi
 platform, because ffmpeg's own device inputs are not reliable for this: its AVFoundation input
 drops about a tenth of the samples on a Mac, audible as a choppy stream.
 
-- macOS and Linux capture through PortAudio (the ``sounddevice`` package, part of the ``audio``
-  extra). macOS has no loopback of its own: what the Mac plays is reached through a virtual
-  output such as BlackHole, chosen as the sound output or inside a Multi-Output Device; the first
-  input whose name looks like one is the default. On Linux the default output's PulseAudio
-  monitor is used; that path has not run on a Linux machine yet.
+- macOS captures through PortAudio (the ``sounddevice`` package, part of the ``audio`` extra). It
+  has no loopback of its own: what the Mac plays is reached through a virtual output such as
+  BlackHole, chosen as the sound output or inside a Multi-Output Device; the first input whose
+  name looks like one is the default.
+- Linux records the monitor of the sound server's default output with ``parec``, the recorder
+  that comes with ``pactl``: PulseAudio and PipeWire both answer it, where PortAudio only reaches
+  the monitor on systems with ALSA's PulseAudio plugin and records the microphone on the others.
+  A receiver that runs as root under ``sudo`` starts the two tools as the user who called it,
+  whose sound server it is. ``device:NAME`` is a PortAudio input, as on macOS.
 - Windows captures the default output's WASAPI loopback (:mod:`stadiacast.loopback`).
 
 Both kinds share one shape: a :class:`CaptureDevice` says what PCM format the device delivers
@@ -25,6 +29,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +43,9 @@ BLOCK = 960
 
 #: Blocks a capture holds for a reader that fell behind: about half a second.
 QUEUE_BLOCKS = 24
+
+#: What ``parec`` is asked for: the headset stream's own format, so that nothing is resampled.
+PULSE_RATE, PULSE_CHANNELS = 48000, 2
 
 
 class BlockCapture(abc.ABC):
@@ -113,6 +121,14 @@ def _sounddevice() -> Any:
         raise SetupError("system audio capture needs the audio extra: pip install 'stadiacast[audio]'") from e
     except OSError as e:  # the binding is there but not the library it wraps
         raise SetupError(f"PortAudio is missing ({e}); on Linux install libportaudio2") from e
+    except Exception as e:
+        # The binding starts PortAudio as it is imported, and a PortAudio that speaks to PulseAudio
+        # fails there when no sound server answers: on a computer without one, or for root, whose
+        # session has none.
+        raise SetupError(
+            f"PortAudio cannot start ({e}): it needs the sound server of the user who is logged in, so run"
+            " the receiver as that user"
+        ) from e
     return sounddevice
 
 
@@ -169,9 +185,13 @@ class PortAudioCapture(BlockCapture):
 def portaudio_devices() -> list[PortAudioDevice]:
     """The PortAudio input devices, in index order, each with its default rate and up to two channels."""
     sd = _sounddevice()
+    try:
+        found = list(sd.query_devices())
+    except Exception as e:  # sounddevice.PortAudioError, which cannot be named before the import
+        raise SetupError(f"PortAudio cannot list the sound devices ({e})") from e
     return [
         PortAudioDevice(str(d["name"]), int(d["default_samplerate"]), min(2, int(d["max_input_channels"])))
-        for d in sd.query_devices()
+        for d in found
         if int(d["max_input_channels"]) > 0
     ]
 
@@ -184,34 +204,162 @@ def pick_loopback(names: list[str]) -> str | None:
     return None
 
 
-def linux_default_monitor() -> str:
-    """The PulseAudio monitor of the default sink: what the computer plays."""
-    exe = shutil.which("pactl")
+def sound_server_user() -> dict[str, Any]:
+    """How to start a PulseAudio tool so that it reaches the sound server of the person at the
+    computer, as keyword arguments for ``subprocess``: nothing for an ordinary user, whose server
+    it is. Root has none, so a receiver started with ``sudo`` runs the tool as the user who
+    called it, with that user's home and runtime directory."""
+    if sys.platform == "win32" or os.geteuid() != 0:
+        return {}
+    uid = os.environ.get("SUDO_UID", "")
+    if not uid.isdigit() or int(uid) == 0:
+        return {}
+    import pwd
+
+    try:
+        entry = pwd.getpwuid(int(uid))
+    except (KeyError, OverflowError):  # nobody has that number
+        return {}
+    try:
+        groups = os.getgrouplist(entry.pw_name, entry.pw_gid)
+    except (OSError, OverflowError):
+        groups = [entry.pw_gid]
+    env = dict(os.environ)
+    env.update(HOME=entry.pw_dir, USER=entry.pw_name, LOGNAME=entry.pw_name, XDG_RUNTIME_DIR=f"/run/user/{uid}")
+    return {"user": entry.pw_uid, "group": entry.pw_gid, "extra_groups": groups, "env": env}
+
+
+def _pulse_tool(name: str) -> str:
+    exe = shutil.which(name)
     if exe is None:
-        raise SetupError("pactl not found: name a capture device with device:NAME (see --audio-devices)")
-    run = subprocess.run([exe, "get-default-sink"], capture_output=True, text=True, timeout=10, check=False)
-    sink = run.stdout.strip()
-    if run.returncode or not sink:
-        raise SetupError("pactl found no default sink: name a capture device with device:NAME")
+        raise SetupError(
+            f"{name} not found: what a Linux computer plays is read from PulseAudio or PipeWire with pactl and"
+            " parec (the pulseaudio-utils package); or name a capture device with device:NAME (see --audio-devices)"
+        )
+    return exe
+
+
+def linux_default_monitor() -> str:
+    """The monitor of the sound server's default output: what the computer plays."""
+    exe = _pulse_tool("pactl")
+    user = sound_server_user()
+    run = subprocess.run([exe, "get-default-sink"], capture_output=True, text=True, timeout=10, check=False, **user)
+    sink = run.stdout.strip() if run.returncode == 0 else ""
+    if not sink:  # a pactl older than 15 has no such command; its info names the sink
+        plain = {**user, "env": {**user.get("env", os.environ), "LC_ALL": "C"}}
+        info = subprocess.run([exe, "info"], capture_output=True, text=True, timeout=10, check=False, **plain)
+        named = [
+            line.partition(":")[2].strip() for line in info.stdout.splitlines() if line.startswith("Default Sink:")
+        ]
+        sink = named[0] if info.returncode == 0 and named else ""
+        if not sink:
+            said = (info.stderr or run.stderr).strip().splitlines()
+            raise SetupError(
+                f"pactl found no default output ({said[-1] if said else 'no answer'}): the sound server belongs to"
+                " the user who is logged in, so run the receiver as that user or with sudo from that user's"
+                " session; or name a capture device with device:NAME"
+            )
     return f"{sink}.monitor"
 
 
+@dataclass(frozen=True)
+class PulseSource(CaptureDevice):
+    """A source of the sound server (PulseAudio, or PipeWire speaking its protocol), recorded by ``parec``."""
+
+    executable: str = "parec"
+
+    def capture(self) -> PulseCapture:
+        return PulseCapture(self)
+
+
+class PulseCapture(BlockCapture):
+    """``parec`` writing raw PCM into a pipe, which a thread cuts into blocks."""
+
+    def __init__(self, device: PulseSource) -> None:
+        super().__init__(device.name, device.rate, device.channels)
+        self._executable = device.executable
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._thread: threading.Thread | None = None
+        self._stopped = False
+
+    def start(self) -> None:
+        if self._stopped:  # stopped before it opened
+            return
+        proc = subprocess.Popen(
+            [
+                self._executable,
+                f"--device={self.name}",
+                "--format=s16le",
+                f"--rate={self.rate}",
+                f"--channels={self.channels}",
+                "--raw",
+                "--latency-msec=20",  # one block at a time: the default hands over seconds at once
+                "--client-name=Stadiacast",
+                "--stream-name=headset",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **sound_server_user(),
+        )
+        self._proc = proc
+        self._thread = threading.Thread(target=self._read, args=(proc,), name="parec", daemon=True)
+        self._thread.start()
+        if self._stopped:  # stopped while it was starting, on another thread
+            self.stop()
+
+    def _read(self, proc: subprocess.Popen[bytes]) -> None:
+        size = BLOCK * self.channels * 2
+        assert proc.stdout is not None and proc.stderr is not None
+        try:
+            while len(block := proc.stdout.read(size)) == size:
+                self._push(block)
+        except (OSError, ValueError):  # the pipe was closed under the read
+            pass
+        if not self._stopped:  # it ended by itself: the sound server went away, or never answered
+            said = proc.stderr.read().decode("utf-8", "replace").strip().splitlines()
+            self.error = f"parec ended: {said[-1] if said else 'no message'}"
+        with contextlib.suppress(OSError):
+            proc.wait(timeout=2)
+        self._mark_end()
+
+    def stop(self) -> None:
+        self._stopped = True
+        proc, self._proc = self._proc, None
+        if proc is None:
+            if self._thread is None:
+                self._mark_end()
+            return
+        with contextlib.suppress(OSError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(2)
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                with contextlib.suppress(OSError):
+                    pipe.close()
+
+
+def linux_monitor() -> PulseSource:
+    """What a Linux computer plays, as a capture device: the default output's monitor."""
+    return PulseSource(linux_default_monitor(), PULSE_RATE, PULSE_CHANNELS, executable=_pulse_tool("parec"))
+
+
 def open_portaudio(name: str | None) -> PortAudioDevice:
-    """A capture device by a fragment of its name (exact match first), or the platform's loopback when ``None``."""
+    """A capture device by a fragment of its name (exact match first), or the Mac's loopback when ``None``."""
     devices = portaudio_devices()
     names = [d.name for d in devices]
     if name is None:
-        if sys.platform.startswith("linux"):
-            # PortAudio's pulse device reads the source PULSE_SOURCE names: the default output's monitor.
-            os.environ["PULSE_SOURCE"] = linux_default_monitor()
-            name = "pulse" if "pulse" in names else "default"
-        else:
-            name = pick_loopback(names)
-            if name is None:
-                raise SetupError(
-                    f"no loopback device among the audio inputs ({', '.join(names) or 'none'}): install BlackHole "
-                    "(brew install blackhole-2ch) and choose it as the sound output, or name an input with device:NAME"
-                )
+        name = pick_loopback(names)
+        if name is None:
+            raise SetupError(
+                f"no loopback device among the audio inputs ({', '.join(names) or 'none'}): install BlackHole "
+                "(brew install blackhole-2ch) and choose it as the sound output, or name an input with device:NAME"
+            )
     key = name.lower()
     match = next((d for d in devices if key == d.name.lower()), None) or next(
         (d for d in devices if key in d.name.lower()), None
@@ -238,9 +386,13 @@ __all__ = [
     "CaptureDevice",
     "PortAudioCapture",
     "PortAudioDevice",
+    "PulseCapture",
+    "PulseSource",
     "linux_default_monitor",
+    "linux_monitor",
     "list_devices",
     "open_portaudio",
     "pick_loopback",
     "portaudio_devices",
+    "sound_server_user",
 ]

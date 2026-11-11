@@ -21,6 +21,14 @@ All notable changes to this project are documented here. The format follows
   virtual pads included. It is taken over the loopback address only, so from the receiver's
   own computer, and is the way to stop a receiver that runs in the background on Windows.
 
+### Fixed
+- On Linux, `--audio-source system` sent the microphone to the headset instead of what the
+  computer plays, on systems without ALSA's PulseAudio plugin. It now records the default
+  output's monitor through the sound server's own `parec`, on PulseAudio and on PipeWire, in
+  the stream's own format, and also when the receiver runs with `sudo`.
+- `--audio-devices` ended in a traceback on Linux when PortAudio could not reach a sound
+  server. It says so in one line, and so does a `device:NAME` source in the log.
+
 ## [1.1.1] - 2026-11-10
 
 A wake connects about 15 seconds sooner: the controller no longer waits on the analytics

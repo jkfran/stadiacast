@@ -424,14 +424,17 @@ def test_system_and_device_spellings_follow_the_platform(monkeypatch) -> None:
         source_from_spec("device:nothing")
 
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("PULSE_SOURCE", "")  # restored after the test: the source sets it
-    monkeypatch.setitem(sys.modules, "sounddevice", _FakeSounddevice([("pulse", 44100, 32), ("default", 44100, 32)]))
-    monkeypatch.setattr(capture, "linux_default_monitor", lambda: "alsa_output.pci.monitor")
-    monitor = source_from_spec("system")
-    assert monitor.args == ["-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "pipe:0"]
-    assert monitor.label == "capture pulse"
-    assert monitor.open_capture is not None and isinstance(monitor.open_capture(), capture.PortAudioCapture)
-    assert os.environ["PULSE_SOURCE"] == "alsa_output.pci.monitor"
+    monkeypatch.setitem(
+        sys.modules, "sounddevice", _FakeSounddevice([("pulse", 44100, 32), ("USB Microphone", 48000, 1)])
+    )
+    monkeypatch.setattr(capture, "linux_monitor", lambda: capture.PulseSource("alsa_output.pci.monitor", 48000, 2))
+    monitor = source_from_spec("system")  # the sound server's monitor, whatever PortAudio lists
+    assert monitor.args == ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
+    assert monitor.label == "capture alsa_output.pci.monitor"
+    assert monitor.open_capture is not None and isinstance(monitor.open_capture(), capture.PulseCapture)
+    usb = source_from_spec("device:usb")  # a named device is a PortAudio input, as on a Mac
+    assert usb.label == "capture USB Microphone" and usb.open_capture is not None
+    assert isinstance(usb.open_capture(), capture.PortAudioCapture)
 
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setitem(sys.modules, "pyaudiowpatch", _FakePyAudio())
@@ -451,6 +454,120 @@ def test_the_loopback_hints_pick_the_virtual_output() -> None:
     assert pick_loopback(["MacBook Pro Microphone", "BlackHole 2ch"]) == "BlackHole 2ch"
     assert pick_loopback(["Monitor of Built-in Audio"]) == "Monitor of Built-in Audio"
     assert pick_loopback(["MacBook Pro Microphone"]) is None
+
+
+def _tool(directory: Any, name: str, script: str) -> None:
+    """A stand-in for one of the sound server's command-line tools, first on PATH."""
+    path = directory / name
+    path.write_text("#!/bin/sh\n" + script)
+    path.chmod(0o755)
+
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="the sound server's tools are POSIX programs")
+MONITOR_ARGS = [
+    "--device=alsa_output.usb-headphones.analog-stereo.monitor",
+    "--format=s16le",
+    "--rate=48000",
+    "--channels=2",
+    "--raw",
+    "--latency-msec=20",
+    "--client-name=Stadiacast",
+    "--stream-name=headset",
+]
+
+
+@posix_only
+def test_what_a_linux_computer_plays_is_recorded_by_the_sound_servers_own_tool(tmp_path, monkeypatch) -> None:
+    """``system`` on Linux: ``pactl`` names the default output, ``parec`` records its monitor, in the
+    stream's own format, and the capture hands the PCM over in blocks until it is stopped."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    _tool(tmp_path, "pactl", 'test "$1" = get-default-sink && echo alsa_output.usb-headphones.analog-stereo\n')
+    # five blocks of the letter A, then it stays, as a recorder does
+    recorder = f'echo "$@" > {tmp_path}/args\nhead -c {5 * BLOCK_BYTES} /dev/zero | tr "\\0" A\nexec sleep 30\n'
+    _tool(tmp_path, "parec", recorder)
+    source = source_from_spec("system")
+    assert source.args == ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
+    assert source.label == "capture alsa_output.usb-headphones.analog-stereo.monitor" and source.open_capture
+    cap = source.open_capture()
+    assert isinstance(cap, capture.PulseCapture)
+    cap.start()
+    try:
+        assert [cap.read(5.0) for _ in range(5)] == [b"A" * BLOCK_BYTES] * 5
+        assert cap.read(0.05) == b""  # nothing more yet: it waits
+        assert (tmp_path / "args").read_text().split() == MONITOR_ARGS
+    finally:
+        cap.stop()
+    assert cap.read(1.0) is None and cap.error is None  # stopped by us: the end, and nothing to report
+    cap.stop()  # a second stop is nothing
+
+
+@posix_only
+def test_a_recorder_that_ends_by_itself_says_why(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    _tool(tmp_path, "pactl", "echo alsa_output.usb-headphones.analog-stereo\n")
+    _tool(tmp_path, "parec", 'echo "Connection failure: Connection refused" >&2\nexit 1\n')
+    cap = capture.linux_monitor().capture()
+    cap.start()
+    assert cap.read(5.0) is None and cap.error == "parec ended: Connection failure: Connection refused"
+    cap.stop()
+    stopped_early = capture.linux_monitor().capture()
+    stopped_early.stop()  # before it was started: nothing runs, and a start after it does nothing
+    stopped_early.start()
+    assert stopped_early.read(0.1) is None and stopped_early.error is None
+
+
+@posix_only
+def test_the_default_output_is_asked_of_any_pactl_and_its_absence_is_said(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    # a pactl from before "get-default-sink", whose info is in English only when asked in C
+    old = (
+        'case "$1" in\n'
+        '  info) if [ "$LC_ALL" = C ]; then echo "Server Name: pulseaudio"; echo "Default Sink: alsa_output.old";\n'
+        '        else echo "Destino por defecto: alsa_output.old"; fi ;;\n'
+        '  *) echo "Invalid command specified." >&2; exit 1 ;;\n'
+        "esac\n"
+    )
+    _tool(tmp_path, "pactl", old)
+    assert capture.linux_default_monitor() == "alsa_output.old.monitor"
+    _tool(tmp_path, "pactl", 'echo "Connection failure: Connection refused" >&2\nexit 1\n')
+    with pytest.raises(SetupError, match=r"no default output \(Connection failure: Connection refused\).*sudo"):
+        capture.linux_default_monitor()
+    _tool(tmp_path, "pactl", "echo alsa_output.pci\n")
+    monkeypatch.setenv("PATH", str(tmp_path))  # pactl is there, the recorder is not
+    with pytest.raises(SetupError, match=r"parec not found.*pulseaudio-utils.*device:NAME"):
+        source_from_spec("system")
+    (tmp_path / "pactl").unlink()
+    with pytest.raises(SetupError, match="pactl not found"):
+        source_from_spec("system")
+
+
+@posix_only
+def test_under_sudo_the_sound_servers_tools_run_as_the_user_who_called_it(monkeypatch) -> None:
+    """A sound server belongs to the session of the person at the computer; root has none."""
+    import pwd
+
+    # the user these tests run as, the one who called sudo when that is root, or any ordinary one
+    numbers = [os.getuid(), int(os.environ.get("SUDO_UID") or 0)]
+    numbers += [u.pw_uid for u in pwd.getpwall() if 1000 <= u.pw_uid < 60000]
+    someone = next((pwd.getpwuid(n) for n in numbers if n != 0), None)
+    if someone is None:
+        pytest.skip("no user but root on this system")
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: someone.pw_uid)
+    assert capture.sound_server_user() == {}  # an ordinary user: the server is its own
+    monkeypatch.setenv("SUDO_UID", str(someone.pw_uid))
+    assert capture.sound_server_user() == {}
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    how = capture.sound_server_user()
+    assert (how["user"], how["group"]) == (someone.pw_uid, someone.pw_gid) and someone.pw_gid in how["extra_groups"]
+    assert how["env"]["XDG_RUNTIME_DIR"] == f"/run/user/{someone.pw_uid}" and how["env"]["HOME"] == someone.pw_dir
+    assert how["env"]["PATH"] == os.environ["PATH"]  # the rest of the environment stays
+    for not_a_user in ("0", "", "abc", "99999999999999999999"):
+        monkeypatch.setenv("SUDO_UID", not_a_user)
+        assert capture.sound_server_user() == {}  # root itself, or no sudo: as it is
 
 
 def test_a_portaudio_capture_drops_blocks_rather_than_lag(monkeypatch) -> None:
@@ -892,6 +1009,17 @@ def test_the_capture_modules_say_what_to_install(tmp_path, monkeypatch) -> None:
     monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
     with pytest.raises(SetupError, match="libportaudio2"):
         capture.portaudio_devices()
+    # A PortAudio that speaks to PulseAudio starts as the binding is imported, and fails there
+    # when no sound server answers. That is one line too, and a test run without a sound server
+    # (which asks for the devices to decide what to skip) goes on.
+    (tmp_path / "sounddevice.py").write_text(
+        "class PortAudioError(Exception):\n    pass\n"
+        "raise PortAudioError(\"Error initializing PortAudio: 'PulseAudio_Initialize: Can't connect to server'\")\n"
+    )
+    monkeypatch.delitem(sys.modules, "sounddevice", raising=False)
+    with pytest.raises(SetupError, match=r"PortAudio cannot start .*Can't connect to server.*logged in"):
+        capture.portaudio_devices()
+    assert _loopback_input_present() is False
     monkeypatch.setitem(sys.modules, "sounddevice", None)  # not installed at all: the extra is named
     with pytest.raises(SetupError, match="audio extra"):
         capture.portaudio_devices()

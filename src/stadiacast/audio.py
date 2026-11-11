@@ -122,13 +122,16 @@ class Source:
         """A capture device by name (``device:NAME``), or the platform's loopback when ``None``.
 
         Always a PCM pipe into ffmpeg: WASAPI loopback on Windows (:mod:`stadiacast.loopback`),
-        PortAudio elsewhere (:mod:`stadiacast.capture`).
+        the sound server's monitor for what a Linux computer plays, PortAudio for the rest
+        (:mod:`stadiacast.capture`).
         """
         dev: capture.CaptureDevice
         if sys.platform == "win32":
             from stadiacast import loopback
 
             dev = loopback.describe(name)
+        elif name is None and sys.platform.startswith("linux"):
+            dev = capture.linux_monitor()
         else:
             dev = capture.open_portaudio(name)
         args = ["-f", "s16le", "-ar", str(dev.rate), "-ac", str(dev.channels), "-i", "pipe:0"]

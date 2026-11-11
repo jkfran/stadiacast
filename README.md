@@ -177,14 +177,17 @@ music (`audio`), and `--audio-volume` the gain. `/_status` reports the stream un
 and `/_audio` starts, stops and adjusts it while the receiver runs
 ([docs/setup.md](docs/setup.md#running)).
 
-`system` and `device:NAME` capture sound and need the `audio` extra, which the executables and
-`uv sync --all-extras` include (Linux also needs the PortAudio library, `apt install
-libportaudio2`). On macOS, send the sound to a virtual output such as BlackHole
-(`brew install blackhole-2ch`), alone or in a Multi-Output Device next to the speakers; the
-volume keys do not act on it, so set the loudness in the app or with `--audio-volume`. On
-Windows the default output's loopback is captured and the volume slider and mute reach the
-headset (`--audio-follow-volume off` sends the raw mix). On Linux the default output's
-PulseAudio monitor is read. How the stream rides the display link is in
+`system` and `device:NAME` capture sound. On macOS and Windows that needs the `audio` extra,
+which the executables and `uv sync --all-extras` include. On macOS, send the sound to a virtual
+output such as BlackHole (`brew install blackhole-2ch`), alone or in a Multi-Output Device
+next to the speakers; the volume keys do not act on it, so set the loudness in the app or with
+`--audio-volume`. On Windows the default output's loopback is captured and the volume slider
+and mute reach the headset (`--audio-follow-volume off` sends the raw mix). On Linux `system`
+records the monitor of the default output from PulseAudio or PipeWire, through their `pactl`
+and `parec` (the `pulseaudio-utils` package), also when the receiver runs with `sudo`; set the
+loudness with `--audio-volume`, since the volume keys do not act on the monitor. `device:NAME`
+on Linux is a PortAudio input and needs the `audio` extra and the PortAudio library (`apt
+install libportaudio2`). How the stream rides the display link is in
 [docs/protocol.md](docs/protocol.md#audio-to-the-headset-jack).
 
 ## Virtual gamepad (Windows)
