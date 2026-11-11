@@ -174,9 +174,9 @@ curl -N http://192.168.2.1/_events
 ```
 
 `POST /_shutdown` stops the receiver as Ctrl-C does, with its helper processes, the headset
-streams and the virtual pads. It is taken from the receiver's own computer only
-(`curl -X POST http://127.0.0.1/_shutdown`) and is the way to stop a receiver that runs in the
-background on Windows, where it cannot be sent a Ctrl-C.
+streams and the virtual pads. It is taken over the loopback address only, so from the
+receiver's own computer (`curl -X POST http://127.0.0.1/_shutdown`), and is the way to stop a
+receiver that runs in the background on Windows, where it cannot be sent a Ctrl-C.
 
 `/_audio` controls the headset stream while the receiver runs: `GET` shows it, and a `POST`
 names an action, `{"do": "start", "source": "system"}` (optionally with `volume` and

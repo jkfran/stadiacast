@@ -18,8 +18,8 @@ All notable changes to this project are documented here. The format follows
   events, one whenever something in it changes, for a program that shows or uses the input
   without reading the log.
 - `POST /_shutdown` stops the receiver as Ctrl-C does, helper processes, headset streams and
-  virtual pads included. It is taken from the receiver's own computer only, and is the way to
-  stop a receiver that runs in the background on Windows.
+  virtual pads included. It is taken over the loopback address only, so from the receiver's
+  own computer, and is the way to stop a receiver that runs in the background on Windows.
 
 ## [1.1.1] - 2026-11-10
 

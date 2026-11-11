@@ -126,9 +126,13 @@ controller: the name, the USB ids, the eleven keys, six axes and the hat, and th
 which is what gives SDL its mapping. A report is written as the events that differ from the
 last one. Rumble comes the other way on the same file, as force feedback requests: a game
 uploads an effect, plays and stops it, and the kernel holds the game until each upload or
-erase is answered. Each pad has a thread for that, so a busy event loop never keeps a game
-waiting, and `Rumble` works out from the effects, their lengths and the gain what the two
-motors do at each moment. Like a feed, the pad lives for one boot of its controller.
+erase is answered. Each pad has a thread for that, so that an answer does not wait for the
+event loop to come round to it, and `Rumble` works out from the effects, their lengths and the
+gain what the two motors do at each moment, following the kernel's own code for pads with two
+motors: an effect that is sent again while it plays starts its run again, effects that play
+together add up, and a periodic effect is rumble on both motors. Like a feed, the pad lives
+for one boot of its controller, and closing its file is what removes it: asking the kernel to
+destroy the device first can cross a game's request on the way.
 
 **`RtcEndpoint`** is one UDP socket and one peer. It demultiplexes datagrams (STUN / DTLS /
 RTP), runs the connectivity checks and keepalives, drives the DTLS handshake through pyOpenSSL

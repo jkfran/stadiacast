@@ -1,8 +1,8 @@
 """The Linux pad against the real kernel: the device uinput creates, read back through its event
 node the way a game reads it, and a game's force feedback requests. Runs on Linux where
-``/dev/uinput`` and the event nodes can be opened (as root, or with the udev rule of the setup
-guide), when STADIACAST_LINUX_LAB is set; skipped elsewhere. A pad appears on the system while a
-test runs: A, the left stick and the left trigger are what it presses."""
+``/dev/uinput`` and the event nodes can be opened (as root, or with the udev rule of the README),
+when STADIACAST_LINUX_LAB is set; skipped elsewhere. A pad appears on the system while a test
+runs: A, the left stick and the left trigger are what it presses."""
 
 from __future__ import annotations
 
@@ -30,8 +30,11 @@ from stadiacast.uinput_gamepad import (
     EV_KEY,
     EV_SYN,
     EVENT,
+    FF_BITS,
     FF_GAIN,
+    FF_PERIODIC,
     FF_RUMBLE,
+    FF_SINE,
     KEYS,
     NEUTRAL,
     UinputPad,
@@ -120,6 +123,15 @@ class Game:
         self.ioctl(self.fd, EVIOCSFF, effect)
         return int(effect.id)
 
+    def upload_sine(self, magnitude: int, length_ms: int) -> int:
+        """Store a periodic effect, a sine of that magnitude, and return its slot."""
+        effect = uinput._Effect(type=FF_PERIODIC, id=-1, replay_length=length_ms)
+        effect.u.periodic.waveform = FF_SINE
+        effect.u.periodic.period = 100
+        effect.u.periodic.magnitude = magnitude
+        self.ioctl(self.fd, EVIOCSFF, effect)
+        return int(effect.id)
+
     def play(self, slot: int, count: int = 1) -> None:
         os.write(self.fd, EVENT.pack(0, 0, EV_FF, slot, count))
 
@@ -151,7 +163,7 @@ def test_the_kernel_takes_the_pad_for_an_xbox_360_controller() -> None:
             assert game.codes(0) == {EV_SYN, EV_KEY, EV_ABS, EV_FF}
             assert game.codes(EV_KEY) == set(KEYS.values())
             assert game.codes(EV_ABS) == set(AXES)
-            assert game.codes(EV_FF) == {FF_RUMBLE, FF_GAIN}
+            assert game.codes(EV_FF) == set(FF_BITS) and FF_PERIODIC in FF_BITS
             assert game.effects() == 16
             for code, (minimum, maximum, fuzz, flat) in AXES.items():
                 assert game.axis(code)[1:] == (minimum, maximum, fuzz, flat, 0), code
@@ -219,18 +231,22 @@ def test_two_pads_are_two_devices() -> None:
 def test_a_games_rumble_comes_out_as_motor_levels_over_time() -> None:
     pad = UinputPad("lab")
     levels: list[tuple[int, int]] = []
+    stamps: list[float] = []  # when the pad's own thread reported each level
+
+    def report(strong: int, weak: int) -> None:
+        levels.append((strong, weak))
+        stamps.append(time.monotonic())
+
     try:
         assert pad.device is not None
-        pad.on_rumble(lambda strong, weak: levels.append((strong, weak)))
+        pad.on_rumble(report)
         game = Game(pad.device)
         try:
             pulse = game.upload(0xC000, 0x4000, length_ms=150)
             assert pulse == 0 and levels == []  # stored on the pad, not played
             game.play(pulse)
-            wait_until(lambda: levels == [(0xC0, 0x40)])
-            began = time.monotonic()
-            wait_until(lambda: levels == [(0xC0, 0x40), (0, 0)])  # it ends by itself
-            assert 0.08 < time.monotonic() - began < 0.6
+            wait_until(lambda: len(levels) >= 2)  # it ends by itself
+            assert levels == [(0xC0, 0x40), (0, 0)] and 0.1 < stamps[1] - stamps[0] < 0.4
 
             hold = game.upload(0xFFFF, 0x8000, length_ms=0)
             assert hold == 1
@@ -252,6 +268,54 @@ def test_a_games_rumble_comes_out_as_motor_levels_over_time() -> None:
             wait_until(lambda: levels[-1] == (0x20, 0x10))
             game.erase(hold)  # an effect that is taken off the pad stops
             wait_until(lambda: levels[-1] == (0, 0))
+        finally:
+            game.close()
+    finally:
+        pad.close()
+
+
+def test_an_effect_sent_again_while_it_plays_starts_its_run_again() -> None:
+    """As on a real pad: a game that keeps a short effect alive by updating it goes on rumbling."""
+    pad = UinputPad("lab")
+    levels: list[tuple[int, int]] = []
+    stamps: list[float] = []
+
+    def report(strong: int, weak: int) -> None:
+        levels.append((strong, weak))
+        stamps.append(time.monotonic())
+
+    try:
+        assert pad.device is not None
+        pad.on_rumble(report)
+        game = Game(pad.device)
+        try:
+            slot = game.upload(0xFFFF, 0xFFFF, length_ms=300)
+            game.play(slot)
+            wait_until(lambda: levels == [(0xFF, 0xFF)])
+            time.sleep(0.1)
+            assert game.upload(0x8000, 0x8000, length_ms=300, slot=slot) == slot
+            wait_until(lambda: len(levels) >= 3)
+            assert levels == [(0xFF, 0xFF), (0x80, 0x80), (0, 0)]
+            assert 0.25 < stamps[2] - stamps[1] < 0.6  # 300 ms from the update, not from the start
+        finally:
+            game.close()
+    finally:
+        pad.close()
+
+
+def test_a_periodic_effect_rumbles_both_motors() -> None:
+    pad = UinputPad("lab")
+    levels: list[tuple[int, int]] = []
+    try:
+        assert pad.device is not None
+        pad.on_rumble(lambda strong, weak: levels.append((strong, weak)))
+        game = Game(pad.device)
+        try:
+            slot = game.upload_sine(0x4000, length_ms=0)
+            game.play(slot)
+            wait_until(lambda: levels == [(0x80, 0x80)])
+            game.play(slot, 0)
+            wait_until(lambda: levels == [(0x80, 0x80), (0, 0)])
         finally:
             game.close()
     finally:

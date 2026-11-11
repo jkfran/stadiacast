@@ -37,6 +37,7 @@ from stadiacast.uinput_gamepad import (
     EV_SYN,
     EVENT,
     Rumble,
+    effect_levels,
     ioc,
     pad_values,
     report,
@@ -44,13 +45,13 @@ from stadiacast.uinput_gamepad import (
 from stadiacast.virtual_gamepad import VirtualGamepads
 from tests.helpers import connect_firmware_flow, make_receiver, single, wait_for
 
-GENERIC_MACHINE = "x86_64"  # the layout of an ioctl number on x86, Arm and RISC-V
+GENERIC = "x86_64"  # an architecture with the common layout of a request number, as Arm and RISC-V have
+OTHER_LAYOUTS = ("alpha", "mips", "ppc", "powerpc", "sparc", "parisc")
 
 
-def test_the_requests_carry_the_kernels_numbers(monkeypatch):
+def test_the_requests_carry_the_kernels_numbers():
     """The values of linux/uinput.h on a 64-bit system, where a wrong size is a request the
     kernel does not know."""
-    monkeypatch.setattr(uinput.platform, "machine", lambda: GENERIC_MACHINE)
     sizes = {
         "uinput_setup": ctypes.sizeof(uinput._Setup),
         "uinput_abs_setup": ctypes.sizeof(uinput._AbsSetup),
@@ -58,23 +59,29 @@ def test_the_requests_carry_the_kernels_numbers(monkeypatch):
         "uinput_ff_upload": ctypes.sizeof(uinput._Upload),
         "uinput_ff_erase": ctypes.sizeof(uinput._Erase),
     }
-    if ctypes.sizeof(ctypes.c_void_p) == 8:
+    wide = ctypes.sizeof(ctypes.c_void_p) == 8
+    if wide:
         assert sizes == {
             "uinput_setup": 92, "uinput_abs_setup": 28, "ff_effect": 48, "uinput_ff_upload": 104, "uinput_ff_erase": 12
         }  # fmt: skip
         assert (uinput._Effect.u.offset, uinput._Upload.effect.offset, uinput._Upload.old.offset) == (16, 8, 56)
     if struct.calcsize("l") == 8:
         assert EVENT.size == 24
-    assert ioc("", "U", 1, 0) == 0x5501
-    assert ioc("", "U", 2, 0) == 0x5502
-    assert ioc("w", "U", 3, 92) == 0x405C5503
-    assert ioc("w", "U", 4, 28) == 0x401C5504
-    assert [ioc("w", "U", n, 4) for n in (100, 101, 103, 107)] == [0x40045564, 0x40045565, 0x40045567, 0x4004556B]
-    assert ioc("w", "U", 108, 8) == 0x4008556C
-    assert (ioc("rw", "U", 200, 104), ioc("w", "U", 201, 104)) == (0xC06855C8, 0x406855C9)
-    assert (ioc("rw", "U", 202, 12), ioc("w", "U", 203, 12)) == (0xC00C55CA, 0x400C55CB)
-    assert ioc("r", "U", 44, 64) == 0x8040552C
-    if platform_is_generic() and ctypes.sizeof(ctypes.c_void_p) == 8:  # what the module itself computed
+    assert ioc("", "U", 1, 0, GENERIC) == 0x5501
+    assert ioc("w", "U", 3, 92, GENERIC) == 0x405C5503
+    assert ioc("w", "U", 4, 28, GENERIC) == 0x401C5504
+    assert [ioc("w", "U", n, 4, GENERIC) for n in (100, 101, 103, 107)] == [
+        0x40045564,
+        0x40045565,
+        0x40045567,
+        0x4004556B,
+    ]
+    assert ioc("w", "U", 108, 8, GENERIC) == 0x4008556C
+    assert (ioc("rw", "U", 200, 104, GENERIC), ioc("w", "U", 201, 104, GENERIC)) == (0xC06855C8, 0x406855C9)
+    assert (ioc("rw", "U", 202, 12, GENERIC), ioc("w", "U", 203, 12, GENERIC)) == (0xC00C55CA, 0x400C55CB)
+    assert ioc("r", "U", 44, 64, GENERIC) == 0x8040552C
+    assert ioc("", "U", 1, 0, "") == 0x5501  # a system without uname: the common layout, never used
+    if wide and not uinput.machine_name().lower().startswith(OTHER_LAYOUTS):  # what the module itself worked out
         assert (uinput.UI_DEV_SETUP, uinput.UI_BEGIN_FF_UPLOAD, uinput.UI_GET_SYSNAME) == (
             0x405C5503,
             0xC06855C8,
@@ -82,14 +89,18 @@ def test_the_requests_carry_the_kernels_numbers(monkeypatch):
         )
 
 
-def platform_is_generic() -> bool:
-    return ioc("", "U", 1, 0) == 0x5501
-
-
-@pytest.mark.parametrize("machine", ["ppc64le", "mips64", "sparc64", "alpha", "parisc64", "powerpc"])
-def test_a_few_architectures_number_their_requests_differently(machine):
-    """Three direction bits and thirteen size bits, with "none" as a bit of its own."""
+@pytest.mark.parametrize("machine", ["ppc64le", "ppc", "mips64", "mips", "sparc64", "alpha", "powerpc"])
+def test_four_architectures_have_three_direction_bits(machine):
+    """Alpha, MIPS, PowerPC and SPARC: thirteen size bits, and "none" as a bit of its own."""
     assert ioc("", "U", 1, 0, machine) == 0x20005501
+    assert ioc("w", "U", 100, 4, machine) == 0x80045564
+    assert ioc("r", "U", 44, 64, machine) == 0x4040552C
+    assert ioc("rw", "U", 200, 104, machine) == 0xC06855C8
+
+
+@pytest.mark.parametrize("machine", ["parisc", "parisc64"])
+def test_pa_risc_has_read_and_write_the_other_way_round(machine):
+    assert ioc("", "U", 1, 0, machine) == 0x5501
     assert ioc("w", "U", 100, 4, machine) == 0x80045564
     assert ioc("r", "U", 44, 64, machine) == 0x4040552C
     assert ioc("rw", "U", 200, 104, machine) == 0xC06855C8
@@ -146,7 +157,7 @@ def test_only_what_changed_is_written_and_a_report_ends_with_a_sync():
 
 def test_an_effect_shakes_for_its_length_after_its_delay():
     rumble = Rumble()
-    rumble.upload(0, 0xC000, 0x4000, 200, 50)
+    rumble.upload(0, 0xC000, 0x4000, 200, 50, 9.0)
     assert rumble.levels(10.0) == (0, 0) and rumble.next_change(10.0) is None  # uploaded is not played
     rumble.play(0, 1, 10.0)
     assert rumble.levels(10.0) == (0, 0) and rumble.next_change(10.0) == pytest.approx(10.05)
@@ -157,7 +168,7 @@ def test_an_effect_shakes_for_its_length_after_its_delay():
 
 def test_an_effect_without_a_length_shakes_until_it_is_stopped():
     rumble = Rumble()
-    rumble.upload(3, 0xFFFF, 0, 0, 0)
+    rumble.upload(3, 0xFFFF, 0, 0, 0, 5.0)
     rumble.play(3, 1, 5.0)
     assert rumble.levels(5.0) == (0xFFFF, 0) and rumble.next_change(5.0) is None
     assert rumble.levels(5000.0) == (0xFFFF, 0)
@@ -169,11 +180,11 @@ def test_an_effect_without_a_length_shakes_until_it_is_stopped():
 
 def test_an_effect_played_several_times_runs_that_often():
     rumble = Rumble()
-    rumble.upload(1, 1000, 2000, 100, 0)
+    rumble.upload(1, 1000, 2000, 100, 0, 0.0)
     rumble.play(1, 3, 0.0)
     assert rumble.levels(0.0) == (1000, 2000) and rumble.next_change(0.0) == pytest.approx(0.3)  # no gap between runs
     assert rumble.levels(0.299) == (1000, 2000) and rumble.levels(0.3) == (0, 0)
-    rumble.upload(2, 1000, 2000, 100, 100)
+    rumble.upload(2, 1000, 2000, 100, 100, 1.0)
     rumble.play(2, 2, 1.0)
     seen = [(rumble.levels(1.0 + at) != (0, 0), rumble.next_change(1.0 + at)) for at in (0.0, 0.1, 0.2, 0.3)]
     assert [shaking for shaking, _next in seen] == [False, True, False, True]
@@ -183,8 +194,8 @@ def test_an_effect_played_several_times_runs_that_often():
 
 def test_effects_add_up_the_gain_scales_them_and_an_erased_one_stops():
     rumble = Rumble()
-    rumble.upload(0, 0x8000, 0x1000, 0, 0)
-    rumble.upload(1, 0x9000, 0x1000, 0, 0)
+    rumble.upload(0, 0x8000, 0x1000, 0, 0, 0.0)
+    rumble.upload(1, 0x9000, 0x1000, 0, 0, 0.0)
     rumble.play(0, 1, 0.0)
     rumble.play(1, 1, 0.0)
     assert rumble.levels(1.0) == (0xFFFF, 0x2000)  # the sum stays in the motor's range
@@ -193,10 +204,45 @@ def test_effects_add_up_the_gain_scales_them_and_an_erased_one_stops():
     rumble.gain = 0xFFFF
     rumble.erase(1)
     assert rumble.levels(1.0) == (0x8000, 0x1000)
-    rumble.upload(0, 0x100, 0x200, 0, 0)  # replaced while it plays: it goes on with the new values
+    rumble.upload(0, 0x100, 0x200, 0, 0, 1.0)  # replaced while it plays: it goes on with the new values
     assert rumble.levels(1.0) == (0x100, 0x200)
     rumble.erase(0)
     assert rumble.levels(1.0) == (0, 0)
+
+
+def test_an_effect_changed_while_it_plays_starts_its_run_again():
+    """What the kernel does for a pad with two motors: a program that keeps a short effect alive
+    by sending it again gets rumble for as long as it does."""
+    rumble = Rumble()
+    rumble.upload(0, 0xFFFF, 0xFFFF, 300, 0, 0.0)
+    rumble.play(0, 1, 0.0)
+    rumble.upload(0, 0x8000, 0x8000, 300, 0, 0.2)
+    assert rumble.levels(0.2) == (0x8000, 0x8000) and rumble.next_change(0.2) == pytest.approx(0.5)
+    assert rumble.levels(0.3) == (0x8000, 0x8000)  # past the first upload's end
+    assert rumble.levels(0.499) == (0x8000, 0x8000) and rumble.levels(0.5) == (0, 0)
+    rumble.upload(0, 0x8000, 0x8000, 300, 0, 0.6)  # after it ran out: stored, not played
+    assert rumble.levels(0.6) == (0, 0)
+
+    rumble.upload(1, 0x1000, 0, 100, 100, 1.0)  # two runs with a delay before each
+    rumble.play(1, 2, 1.0)
+    rumble.upload(1, 0x2000, 0, 100, 100, 1.25)  # changed in the second run's delay: one run is left
+    seen = [rumble.levels(1.25 + at)[0] for at in (0.0, 0.1, 0.19, 0.2)]
+    assert seen == [0, 0x2000, 0x2000, 0] and rumble.next_change(1.45) is None
+
+
+def test_a_periodic_effect_is_played_as_rumble_on_both_motors():
+    def effect(kind: int, **fields: int) -> uinput._Effect:
+        made = uinput._Effect(type=kind)
+        for name, value in fields.items():
+            setattr(made.u.rumble if name.endswith("_magnitude") else made.u.periodic, name, value)
+        return made
+
+    assert effect_levels(effect(uinput.FF_RUMBLE, strong_magnitude=0xC000, weak_magnitude=0x10)) == (0xC000, 0x10)
+    assert effect_levels(effect(uinput.FF_PERIODIC, waveform=uinput.FF_SINE, magnitude=0x4000)) == (0x8000, 0x8000)
+    assert effect_levels(effect(uinput.FF_PERIODIC, magnitude=-0x4000)) == (0x8000, 0x8000)
+    assert effect_levels(effect(uinput.FF_PERIODIC, magnitude=0x7FFF)) == (0xFFFF, 0xFFFF)
+    assert effect_levels(effect(uinput.FF_PERIODIC, magnitude=-0x8000)) == (0xFFFF, 0xFFFF)
+    assert effect_levels(effect(0x52)) is None  # a constant force: not something two motors do
 
 
 def test_the_pad_is_for_linux_and_says_what_keeps_the_device_shut(tmp_path, monkeypatch):

@@ -8,8 +8,8 @@ no package and no compiler: a kernel with uinput and the right to open the devic
 
 A game's rumble arrives on the same file as force feedback requests: an effect is uploaded,
 played, stopped and erased, and :class:`Rumble` turns what plays into the two motor levels over
-time. The mapping and that bookkeeping are plain Python and run in the tests of every platform;
-:class:`UinputPad` needs Linux.
+time, the way the kernel does it for a pad of this kind. The mapping and that bookkeeping are
+plain Python and run in the tests of every platform; :class:`UinputPad` needs Linux.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import contextlib
 import ctypes
 import errno
 import os
-import platform
 import struct
 import sys
 import threading
@@ -37,7 +36,8 @@ BTN_SELECT, BTN_START, BTN_MODE = 0x13A, 0x13B, 0x13C
 BTN_THUMBL, BTN_THUMBR = 0x13D, 0x13E
 ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ = 0, 1, 2, 3, 4, 5
 ABS_HAT0X, ABS_HAT0Y = 0x10, 0x11
-FF_RUMBLE, FF_GAIN = 0x50, 0x60
+FF_RUMBLE, FF_PERIODIC, FF_GAIN = 0x50, 0x51, 0x60
+FF_SQUARE, FF_TRIANGLE, FF_SINE = 0x58, 0x59, 0x5A  # the waveforms of a periodic effect
 UI_FF_UPLOAD, UI_FF_ERASE = 1, 2  # the codes of an EV_UINPUT event
 BUS_USB = 0x03
 
@@ -46,6 +46,9 @@ PAD_NAME = "Microsoft X-Box 360 pad"
 PAD_VENDOR, PAD_PRODUCT, PAD_VERSION = 0x045E, 0x028E, 0x0114
 #: Force feedback effects a game can keep on the pad at once (``xpad`` has as many).
 FF_EFFECTS = 16
+#: What the pad offers a game, which is what the kernel offers for an ``xpad`` pad: rumble, the
+#: periodic effects it plays as rumble, and a gain.
+FF_BITS = (FF_RUMBLE, FF_PERIODIC, FF_SQUARE, FF_TRIANGLE, FF_SINE, FF_GAIN)
 #: Where the kernel's uinput device has been found.
 UINPUT_PATHS = ("/dev/uinput", "/dev/input/uinput", "/dev/misc/uinput")
 
@@ -91,13 +94,22 @@ NEUTRAL: dict[str, int] = {
 }
 
 
+def machine_name() -> str:
+    """The kernel's name for this processor (``uname -m``); empty on a system without ``uname``,
+    where no request is ever made."""
+    return os.uname().machine if hasattr(os, "uname") else ""
+
+
 def ioc(direction: str, kind: str, number: int, size: int, machine: str | None = None) -> int:
-    """An ``ioctl`` request number (asm-generic/ioctl.h): ``direction`` is ``""``, ``"r"``,
-    ``"w"`` or ``"rw"`` as seen from the program, ``kind`` the driver's letter. A few
-    architectures lay the number out in another way."""
-    machine = (platform.machine() if machine is None else machine).lower()
-    if machine.startswith(("alpha", "mips", "parisc", "ppc", "powerpc", "sparc")):
+    """An ``ioctl`` request number: ``direction`` is ``""``, ``"r"``, ``"w"`` or ``"rw"`` as seen
+    from the program, ``kind`` the driver's letter. Most architectures share one layout
+    (asm-generic/ioctl.h); Alpha, MIPS, PowerPC and SPARC have three direction bits and thirteen
+    size bits, and PA-RISC has the common layout with read and write the other way round."""
+    machine = (machine_name() if machine is None else machine).lower()
+    if machine.startswith(("alpha", "mips", "ppc", "powerpc", "sparc")):
         size_bits, none, read, write = 13, 1, 2, 4
+    elif machine.startswith("parisc"):
+        size_bits, none, read, write = 14, 0, 1, 2
     else:
         size_bits, none, read, write = 14, 0, 2, 1
     bits = (read if "r" in direction else 0) | (write if "w" in direction else 0) or none
@@ -180,7 +192,6 @@ class _Erase(ctypes.Structure):  # struct uinput_ff_erase
 
 _INT = ctypes.sizeof(ctypes.c_int)
 UI_DEV_CREATE = ioc("", "U", 1, 0)
-UI_DEV_DESTROY = ioc("", "U", 2, 0)
 UI_DEV_SETUP = ioc("w", "U", 3, ctypes.sizeof(_Setup))
 UI_ABS_SETUP = ioc("w", "U", 4, ctypes.sizeof(_AbsSetup))
 UI_SET_EVBIT = ioc("w", "U", 100, _INT)
@@ -233,14 +244,31 @@ def report(values: Mapping[tuple[int, int], int], before: Mapping[tuple[int, int
     return b"".join(events) + EVENT.pack(0, 0, EV_SYN, SYN_REPORT, 0)
 
 
+def effect_levels(effect: Any) -> tuple[int, int] | None:
+    """The strong and the weak motor level of a ``struct ff_effect``, 0..65535 each, or ``None``
+    for a kind of effect the pad does not play.
+
+    A periodic effect shakes both motors at twice its magnitude, which is how the kernel plays
+    one on a pad that can only rumble; its waveform and its envelope are not followed.
+    """
+    if effect.type == FF_RUMBLE:
+        return effect.u.rumble.strong_magnitude, effect.u.rumble.weak_magnitude
+    if effect.type == FF_PERIODIC:
+        level = min(0xFFFF, abs(effect.u.periodic.magnitude) * 0xFFFF // 0x7FFF)
+        return level, level
+    return None
+
+
 class Rumble:
     """What the force feedback effects on a pad add up to at a given moment.
 
     The kernel hands a uinput device every request as the game made it: an effect is uploaded
-    into a slot, played a number of times and stopped, and the gain scales all of them. An
-    effect lasts ``length`` ms after ``delay`` ms, or until it is stopped when its length is 0;
-    played ``count`` times it runs that often, one run after the other. Effects that play
-    together add up, as they do in the kernel's own rumble drivers.
+    into a slot, played a number of times and stopped, and the gain scales all of them. This
+    class does with them what the kernel does for the pads whose driver can only set two motors
+    (its ff-memless): an effect lasts ``length`` ms after ``delay`` ms, or until it is stopped
+    when its length is 0; played ``count`` times it runs that often, one run after the other;
+    an effect that is changed while it plays starts its run again; and effects that play
+    together add up.
     """
 
     def __init__(self) -> None:
@@ -248,8 +276,17 @@ class Rumble:
         self._effects: dict[int, tuple[int, int, int, int]] = {}  # slot -> strong, weak, length ms, delay ms
         self._playing: dict[int, tuple[float, int]] = {}  # slot -> started at, count
 
-    def upload(self, slot: int, strong: int, weak: int, length_ms: int, delay_ms: int) -> None:
-        """Set or replace the effect in ``slot``; one that is playing goes on with the new values."""
+    def upload(self, slot: int, strong: int, weak: int, length_ms: int, delay_ms: int, now: float) -> None:
+        """Set or replace the effect in ``slot``. One that is playing starts its run again from
+        ``now`` with the new values, the runs it has finished staying finished."""
+        if slot in self._playing:
+            started, count = self._playing[slot]
+            _strong, _weak, length, delay = self._effects[slot]
+            finished = max(0, round((now - started) * 1000)) // (delay + length) if length else 0
+            if finished >= count:
+                del self._playing[slot]
+            else:
+                self._playing[slot] = (now, count - finished)
         self._effects[slot] = (strong & 0xFFFF, weak & 0xFFFF, max(0, length_ms), max(0, delay_ms))
 
     def erase(self, slot: int) -> None:
@@ -331,8 +368,9 @@ def check_available() -> None:
 
 
 class UinputPad:
-    """One virtual Xbox 360 pad. Its force feedback requests are answered on a thread of its own:
-    a game waits inside the kernel until each of them is."""
+    """One virtual Xbox 360 pad. Its force feedback requests are answered on a thread of its own,
+    since a game waits inside the kernel until each of them is: an answer then never waits for
+    the event loop to come round to it."""
 
     slot: int | None = None  # Linux has no XInput player slot
     # Declared here because a type checker on another system does not read past the first lines
@@ -387,8 +425,8 @@ class UinputPad:
             ioctl(fd, UI_SET_EVBIT, kind)
         for code in KEYS.values():
             ioctl(fd, UI_SET_KEYBIT, code)
-        ioctl(fd, UI_SET_FFBIT, FF_RUMBLE)
-        ioctl(fd, UI_SET_FFBIT, FF_GAIN)
+        for bit in FF_BITS:
+            ioctl(fd, UI_SET_FFBIT, bit)
         setup = _Setup(BUS_USB, PAD_VENDOR, PAD_PRODUCT, PAD_VERSION, PAD_NAME.encode(), FF_EFFECTS)
         ioctl(fd, UI_DEV_SETUP, setup)
         for code, (minimum, maximum, fuzz, flat) in AXES.items():
@@ -468,18 +506,13 @@ class UinputPad:
             with contextlib.suppress(OSError):  # a request the kernel has given up waiting for
                 self._ioctl(self._fd, UI_BEGIN_FF_UPLOAD, upload)
                 effect = upload.effect
-                if effect.type == FF_RUMBLE:
-                    rumble = effect.u.rumble
-                    self._rumble.upload(
-                        effect.id,
-                        rumble.strong_magnitude,
-                        rumble.weak_magnitude,
-                        effect.replay_length,
-                        effect.replay_delay,
-                    )
-                    upload.retval = 0
-                else:
+                levels = effect_levels(effect)
+                if levels is None:
                     upload.retval = -errno.EINVAL
+                else:
+                    length, delay = effect.replay_length, effect.replay_delay
+                    self._rumble.upload(effect.id, *levels, length, delay, time.monotonic())
+                    upload.retval = 0
                 self._ioctl(self._fd, UI_END_FF_UPLOAD, upload)
         elif kind == EV_UINPUT and code == UI_FF_ERASE:
             erase = _Erase(request_id=value & 0xFFFFFFFF)
@@ -516,8 +549,9 @@ class UinputPad:
             os.write(self._wake_w, b"x")
         if self._thread is not threading.current_thread():
             self._thread.join(2)
-        with contextlib.suppress(OSError):
-            self._ioctl(self._fd, UI_DEV_DESTROY)
+        # Closing the file is what removes the device. Asking for it with UI_DEV_DESTROY first
+        # takes the kernel's locks in an order that a game's request, coming the other way at
+        # that moment, can cross on kernels without the fix for it; a close cannot.
         self._close_files()
 
 
@@ -528,6 +562,7 @@ __all__ = [
     "Rumble",
     "UinputPad",
     "check_available",
+    "effect_levels",
     "open_uinput",
     "pad_values",
     "report",

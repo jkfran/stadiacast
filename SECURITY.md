@@ -22,9 +22,9 @@ anywhere else:
   `/_events` show what is pressed on each controller as it happens. `/_rumble` and
   `/_start_game` act on a controller. `/_audio` starts and stops the stream to a controller's
   headset from a sound file of this computer, from what the computer plays or from one of its
-  capture devices, a microphone included. `/_shutdown` stops the receiver and is taken from its
-  own computer only. What a browser sends on behalf of a web page is refused (any request other
-  than `GET` that carries an `Origin` header).
+  capture devices, a microphone included. `/_shutdown` stops the receiver and is taken over the
+  loopback address only. What a browser sends on behalf of a web page is refused (any request
+  other than `GET` that carries an `Origin` header).
 - **It impersonates Google hostnames** for the clients that resolve names through its DNS sink,
   and the sink answers whoever asks it. Only point the devices at it that you want to talk to
   the receiver; names it does not redirect are forwarded to your resolver unchanged.

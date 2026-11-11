@@ -7,12 +7,14 @@ import asyncio
 import datetime
 import email.utils
 import json
+import time
 from typing import Any
 
 from cryptography import x509
 
 from stadiacast import __version__, receiver
 from stadiacast.http_server import HttpRequest
+from stadiacast.virtual_gamepad import VirtualGamepads
 from tests.fake_controller import FakeController
 from tests.helpers import connect_firmware_flow, make_receiver, no_log, single, wait_for
 
@@ -269,7 +271,7 @@ def test_events_sends_the_live_state_when_it_changes_and_ends_with_the_receiver(
 
 def test_changes_that_come_together_share_one_event(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver, "EVENTS_HEARTBEAT", 60.0)
-    monkeypatch.setattr(receiver, "EVENTS_MIN_GAP", 0.05)
+    monkeypatch.setattr(receiver, "EVENTS_MIN_GAP", 0.2)
 
     async def run():
         rx = make_receiver(tmp_path)
@@ -277,18 +279,77 @@ def test_changes_that_come_together_share_one_event(tmp_path, monkeypatch):
         rx.event_streams.add(stream)
         try:
             assert (await stream.next_chunk() or b"").startswith(b"retry: 1000\n\nevent: input\ndata: {")
+            waiting = asyncio.ensure_future(stream.next_chunk())
+            await asyncio.sleep(0.05)
+            assert not waiting.done()  # nothing has changed
+            rx.live_changed()  # the first change of a burst: the event waits for the rest of it
+            await asyncio.sleep(0.05)
+            assert not waiting.done()
             for _ in range(20):
                 rx.live_changed()
-            assert (await asyncio.wait_for(stream.next_chunk(), 1) or b"").startswith(b"event: input\ndata: {")
-            waiting = asyncio.ensure_future(stream.next_chunk())  # nothing changed since: no further event
-            await asyncio.sleep(0.2)
+            assert (await asyncio.wait_for(waiting, 2) or b"").startswith(b"event: input\ndata: {")
+            waiting = asyncio.ensure_future(stream.next_chunk())  # the burst was that one event
+            await asyncio.sleep(0.3)
             assert not waiting.done()
             rx.stopping = True
             rx.live_changed()
-            assert await asyncio.wait_for(waiting, 1) is None  # the receiver stops: the stream ends
+            assert await asyncio.wait_for(waiting, 2) is None  # the receiver stops: the stream ends
         finally:
             stream.close()
         assert not rx.event_streams
+
+    asyncio.run(run())
+
+
+def test_a_pad_that_appears_or_rumbles_is_an_event(tmp_path, monkeypatch):
+    """The virtual pad is part of the live state: its creation, which can take seconds, and a
+    game's rumble send an event of their own."""
+    monkeypatch.setattr(receiver, "EVENTS_HEARTBEAT", 60.0)
+    pads = []
+
+    class SlowPad:
+        slot = 3
+
+        def __init__(self, _label: str) -> None:
+            time.sleep(0.3)  # in the worker thread that creates it
+            self.rumble = None
+            pads.append(self)
+
+        def apply(self, xinput: dict[str, int]) -> None:
+            pass
+
+        def reset(self) -> None:
+            pass
+
+        def on_rumble(self, callback) -> None:
+            self.rumble = callback
+
+        def close(self) -> None:
+            pass
+
+    async def run():
+        rx = make_receiver(tmp_path, display_rpc_delay=0.05)
+        rx.gamepads = VirtualGamepads(rx.cfg, rx.log, rx, SlowPad)
+        await rx.start()
+        client = await EventsClient.open(rx.http.http_ports[0])
+        fc = None
+        try:
+            fc = await connect_firmware_flow(rx)
+            await asyncio.wait_for(fc.display_ready.wait(), 5)
+            assert (await fc.keepalive())["code"] == 0
+            assert fc.send_input_rpc(buttons=1 << 12)
+            pressed = await client.until(lambda doc: doc["controllers"].get("c0", {}).get("input") is not None)
+            assert pressed["controllers"]["c0"]["gamepad"] is None  # the pad is still being made
+            made = await client.until(lambda doc: doc["controllers"]["c0"]["gamepad"] is not None)
+            assert made["controllers"]["c0"]["gamepad"] == {"slot": 3, "frames": 1, "rumbles": 0}
+            pads[0].rumble(1, 2)  # a game moves the motors
+            shaken = await client.until(lambda doc: doc["controllers"]["c0"]["gamepad"]["rumbles"] == 1)
+            assert shaken["controllers"]["c0"]["gamepad"]["frames"] == 1
+        finally:
+            client.close()
+            if fc is not None:
+                fc.close()
+            await rx.stop()
 
     asyncio.run(run())
 
@@ -342,7 +403,7 @@ def test_shutdown_is_taken_from_the_receivers_own_computer_only(tmp_path):
                 "POST", "/_shutdown", "HTTP/1.1", [], b"", ("192.168.2.4", 50000), "c9", None, None, path="/_shutdown"
             )
             answer = await rx.handle(elsewhere)
-            assert answer.status == 403 and b"the computer the receiver runs on" in answer.body
+            assert answer.status == 403 and b"only over the loopback address" in answer.body
             assert not rx.stop_requested.is_set()
 
             st, _, body = await fc.request("POST", "x.local", "/_shutdown", port=port, tls=False)

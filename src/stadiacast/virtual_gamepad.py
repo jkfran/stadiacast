@@ -324,6 +324,7 @@ class VirtualGamepads:
         self._failed[label] = message
         self._pending.pop(label, None)
         self.log("gamepad_failed", controller=label, error=message)
+        self.rx.live_changed()
 
     def _backend_failed(self, label: str, pad: PadBackend, error: str) -> None:
         if self._closed or self._pads.get(label) is not pad:
@@ -333,6 +334,7 @@ class VirtualGamepads:
         self._failed[label] = error
         self.log("gamepad_failed", controller=label, error=error)
         self._close_pad(label, pad)
+        self.rx.live_changed()
 
     async def _create(self, label: str, generation: int, after: asyncio.Task[None] | None = None) -> None:
         """Build the pad for ``label`` in a worker thread, then keep it or let it go.
@@ -396,6 +398,7 @@ class VirtualGamepads:
         if self.kind == "uinput":
             created["device"] = getattr(pad, "device", None)
         self.log("gamepad_created", controller=label, **created)
+        self.rx.live_changed()
         for state in self._pending.pop(label, ()):
             self._apply(label, pad, state)
             if label in self._failed:
@@ -409,6 +412,7 @@ class VirtualGamepads:
             return
         left, right = min(65535, large * MOTOR_SCALE), min(65535, small * MOTOR_SCALE)
         self._rumbles[label] = self._rumbles.get(label, 0) + 1
+        self.rx.live_changed()
         try:
             seq = ctl.game.set_rumble(left, right)
         except (RuntimeError, ValueError) as e:

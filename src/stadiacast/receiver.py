@@ -639,11 +639,12 @@ class Receiver:
     def _shutdown(self, req: HttpRequest) -> HttpResponse:
         """``POST /_shutdown``: stop the receiver as Ctrl-C does, helper processes, streams and
         virtual pads included.  A receiver that runs in the background on Windows cannot be sent a
-        Ctrl-C, and one that is killed leaves its helpers behind.  Taken from this computer only."""
+        Ctrl-C, and one that is killed leaves its helpers behind.  Taken over the loopback address
+        only: a request to another of this computer's addresses is refused like one from elsewhere."""
         if req.method != "POST":
             return HttpResponse(405, b"", handler="shutdown")
         if req.peer is None or not is_loopback(req.peer[0]):
-            return self._json(403, {"error": "only from the computer the receiver runs on"}, handler="shutdown")
+            return self._json(403, {"error": "only over the loopback address (127.0.0.1)"}, handler="shutdown")
         self.log("shutdown_requested", peer=req.peer)
         self.stop_requested.set()
         return HttpResponse(200, b'{"ok": true}', "application/json", handler="shutdown", close=True)
