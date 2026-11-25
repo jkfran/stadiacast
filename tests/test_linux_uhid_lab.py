@@ -459,7 +459,6 @@ def test_the_kernel_takes_the_pad_for_a_dualsense(dualsense: DualSensePad) -> No
             return
         assert game.identity() == (0x03, 0x054C, 0x0CE6, 0x8111)
         assert sorted(game.codes(EV_KEY)) == DS_KEYS and game.codes(EV_ABS) == DS_AXES
-        assert EV_FF in game.codes(0)
     finally:
         game.close()
     # and since Linux 6.18 one more, for a headset in the pad's jack
@@ -578,7 +577,8 @@ def test_a_dualsenses_rumble_reaches_the_motors_and_stops_with_the_program_that_
 
 def test_a_games_force_feedback_reaches_the_motors_through_the_playstation_driver(dualsense: DualSensePad) -> None:
     """A game that rumbles through the gamepad's event node: hid-playstation turns the effect into
-    the pad's output report."""
+    the pad's output report. Force feedback is an option of that driver's build, and a kernel made
+    for servers may leave it out: its gamepad then takes no effect, from any DualSense."""
     assert dualsense.device is not None
     if _driver(dualsense.device) != "playstation":
         pytest.skip("hid-playstation did not take the pad (not built, or not loaded)")
@@ -586,6 +586,8 @@ def test_a_games_force_feedback_reaches_the_motors_through_the_playstation_drive
     dualsense.on_rumble(lambda strong, weak: levels.append((strong, weak)))
     game = _gamepad(dualsense)
     try:
+        if EV_FF not in game.codes(0):
+            pytest.skip("this kernel's hid-playstation was built without force feedback (CONFIG_PLAYSTATION_FF)")
         slot = game.upload(0x8000, 0x4000, 0)
         game.play(slot)
         wait_until(lambda: (0x80, 0x40) in levels)
