@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-25
+
+A virtual DualSense controller on Linux, for Steam with several controllers; virtual pads that
+are plugged in when a controller connects and unplugged when it is switched off, on Windows as
+on Linux and macOS; and the battery level from the moment a controller connects.
+
 ### Added
 - A virtual DualSense controller on Linux: `--gamepad dualsense` turns each controller into a
   Sony DualSense on its cable (USB `054c:0ce6`), through the kernel's uhid device. Steam knows
@@ -300,7 +306,8 @@ confirmed against real controllers running the last Wi-Fi firmware, `ota.282115`
   security policy, code of conduct.
 - MIT License, with a `NOTICE` for the three protobuf schemas reproduced from the firmware.
 
-[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/jkfran/stadiacast/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/jkfran/stadiacast/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/jkfran/stadiacast/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/jkfran/stadiacast/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/jkfran/stadiacast/compare/v1.1.1...v1.2.0
